@@ -69,6 +69,9 @@ def gerar_excel_em_memoria(dados_diarios, dados_mes):
     output.seek(0)
     return output
 
+def formatar_moeda_br(valor):
+    return f"R$ {valor:,.2f}".replace(',', 'v').replace('.', ',').replace('v', '.')
+
 def construir_corpo_email(dados):
     # Convertendo os nomes das colunas para minúsculas
     dados.columns = [col.lower() for col in dados.columns]
@@ -90,11 +93,12 @@ def construir_corpo_email(dados):
         corpo_email += f"<h3>{nome_empresa}</h3>"
         corpo_email += f"<p>Quantidade Total de Faltas: {int(sumario['qt_falta'])}</p>"
         corpo_email += f"<p>Quantidade Total de Cortes: {int(sumario['qt_corte'])}</p>"
-        corpo_email += f"<p>Valor Total de Faltas: R$ {sumario['pvenda_falta']:,.2f}</p>"
-        corpo_email += f"<p>Valor Total de Cortes: R$ {sumario['pvenda_corte']:,.2f}</p>"
+        corpo_email += f"<p>Valor Total de Faltas: {formatar_moeda_br(sumario['pvenda_falta'])}</p>"
+        corpo_email += f"<p>Valor Total de Cortes: {formatar_moeda_br(sumario['pvenda_corte'])}</p>"
 
     corpo_email += "</body></html>"
     return corpo_email
+
 
 
 def enviar_email(assunto, corpo, excel_data):
