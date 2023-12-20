@@ -1,0 +1,5 @@
+.env
+analitico_corte_falta.sql
+sintetico_corte_falta.sql
+Sentinela-corte-falta.log
+__pycache__/config_bd.cpython-312.pyc
