@@ -52,22 +52,28 @@ def auto_ajustar_colunas(worksheet):
         adjusted_width = (max_length + 2)
         worksheet.column_dimensions[column].width = adjusted_width
 
-def gerar_excel_em_memoria(dados_diarios, dados_mes):
+def gerar_excel_em_memoria(dados_sintetico, dados_analitico):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        # Dados diários
-        nome_aba_diaria = datetime.now().strftime('%d %m %Y')
-        dados_diarios.to_excel(writer, sheet_name=nome_aba_diaria, index=False)
-        wb = writer.book
-        auto_ajustar_colunas(wb[nome_aba_diaria])
+        # Obtendo a data de ontem
+        data_ontem = (datetime.now() - pd.Timedelta(days=1)).strftime('%d %m %Y')
 
-        # Dados mensais
-        nome_aba_mensal = datetime.now().strftime('%B %Y')
-        dados_mes.to_excel(writer, sheet_name=nome_aba_mensal, index=False)
-        auto_ajustar_colunas(wb[nome_aba_mensal])
+        # Nomeando as abas
+        nome_aba_sintetico = f"Sintético ({data_ontem})"
+        nome_aba_analitico = f"Analítico ({data_ontem})"
+
+        # Dados sintéticos
+        dados_sintetico.to_excel(writer, sheet_name=nome_aba_sintetico, index=False)
+        wb = writer.book
+        auto_ajustar_colunas(wb[nome_aba_sintetico])
+
+        # Dados analíticos
+        dados_analitico.to_excel(writer, sheet_name=nome_aba_analitico, index=False)
+        auto_ajustar_colunas(wb[nome_aba_analitico])
     
     output.seek(0)
     return output
+
 
 def formatar_moeda_br(valor):
     return f"R$ {valor:,.2f}".replace(',', 'v').replace('.', ',').replace('v', '.')
@@ -127,7 +133,7 @@ def enviar_email(assunto, corpo, excel_data):
 
 
 def verificar_mudancas():
-    if datetime.now().hour == 8 and datetime.now().minute == 0:
+    if datetime.now().hour == 9 and datetime.now().minute == 24:
         logging.info("Iniciando a verificação de corte e falta de itens.")
         try:
             dados_diarios = executar_consulta_sql('sintetico_corte_falta.sql')
