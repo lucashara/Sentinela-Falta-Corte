@@ -3,7 +3,7 @@ import os
 import time
 import logging
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import boto3
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -74,38 +74,116 @@ def gerar_excel_em_memoria(dados_sintetico, dados_analitico):
     output.seek(0)
     return output
 
-
 def formatar_moeda_br(valor):
     return f"R$ {valor:,.2f}".replace(',', 'v').replace('.', ',').replace('v', '.')
 
 def construir_corpo_email(dados):
+    # Obtendo a data de referência (dia anterior)
+    data_referencia = (datetime.now() - timedelta(days=1)).strftime("%d/%m/%Y")
+
     # Convertendo os nomes das colunas para minúsculas
     dados.columns = [col.lower() for col in dados.columns]
 
-    corpo_email = "<html><body><p>Prezados,</p><p>Segue o relatório referente a corte e falta de itens:</p>"
-    corpo_email += "<h2>Resumo por Filial</h2>"
-
-    # Certifique-se de que a coluna 'codfilial' está em formato string
+    # Certifique-se de que a coluna 'codfilial' esteja em formato string
     dados['codfilial'] = dados['codfilial'].astype(str)
 
     # Agrupando dados por 'codfilial'
     agrupamento_filial = dados.groupby('codfilial')
 
-    # Calculando a soma para cada filial
-    sumario_filial = agrupamento_filial[['qt_falta', 'qt_corte', 'pvenda_falta', 'pvenda_corte']].sum()
-
-    for filial, sumario in sumario_filial.iterrows():
+    tabelas_html = ""
+    for filial, sumario in agrupamento_filial[['qt_falta', 'qt_corte', 'pvenda_falta', 'pvenda_corte']].sum().iterrows():
         nome_empresa = "Farmaum PB" if filial == '1' else "Farmaum RN" if filial == '2' else "Brasil" if filial == '3' else "Outra"
-        corpo_email += f"<h3>{nome_empresa}</h3>"
-        corpo_email += f"<p>Quantidade Total de Faltas: {int(sumario['qt_falta'])}</p>"
-        corpo_email += f"<p>Quantidade Total de Cortes: {int(sumario['qt_corte'])}</p>"
-        corpo_email += f"<p>Valor Total de Faltas: {formatar_moeda_br(sumario['pvenda_falta'])}</p>"
-        corpo_email += f"<p>Valor Total de Cortes: {formatar_moeda_br(sumario['pvenda_corte'])}</p>"
+        tabelas_html += f'''
+        <div class="table-container">
+            <table>
+                <tr><th colspan="2" style="background-color: #0056b3; color: white; text-align: center;">{nome_empresa}</th></tr>
+                <tr class="zoomable"><td>Quantidade Total de Faltas</td><td><b>{int(sumario['qt_falta'])}</b></td></tr>
+                <tr class="zoomable"><td>Quantidade Total de Cortes</td><td><b>{int(sumario['qt_corte'])}</b></td></tr>
+                <tr class="zoomable"><td>Valor Total de Faltas</td><td><b>{formatar_moeda_br(sumario['pvenda_falta'])}</b></td></tr>
+                <tr class="zoomable"><td>Valor Total de Cortes</td><td><b>{formatar_moeda_br(sumario['pvenda_corte'])}</b></td></tr>
+            </table>
+        </div>
+        '''
 
-    corpo_email += "</body></html>"
+    # Montagem do corpo do e-mail usando f-strings e estilo CSS
+    corpo_email = f'''
+    <html>
+    <head>
+        <style>
+            body {{
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                font-size: 14px;
+                color: #333;
+                padding: 20px;
+                line-height: 1.6;
+            }}
+            h1 {{
+                color: #0056b3;
+                text-align: center;
+                font-size: 24px;
+                margin-bottom: 10px;
+            }}
+            .table-container {{
+                perspective: 600px;
+                margin-bottom: 10px;
+            }}
+            table {{
+                width: 70%;
+                margin: auto;
+                border-collapse: collapse;
+            }}
+            .zoomable:hover {{
+                transform: scale(1.05);
+                transition: transform 0.2s ease;
+            }}
+            th, td {{
+                border: 1px solid #ddd;
+                padding: 12px 15px;
+                text-align: center;
+                font-size: 14px;
+                background-color: #ffffff;
+                color: #333;
+            }}
+            th {{
+                background-color: #007bff;
+                color: #ffffff;
+                font-weight: normal;
+            }}
+            tr:nth-child(odd) {{
+                background-color: #f2f2f2;
+            }}
+            @media (prefers-color-scheme: dark) {{
+                body {{
+                    color: #f1f1f1;
+                }}
+                table, th, td {{
+                    border-color: #555;
+                }}
+                th, tr:nth-child(odd) {{
+                    background-color: #3a3a3a;
+                }}
+            }}
+            footer {{
+                text-align: center;
+                font-size: 12px;
+                margin-top: 30px;
+                padding-top: 10px;
+                border-top: 1px solid #ccc;
+                color: #777;
+            }}
+        </style>
+    </head>
+    <body>
+        <h1>Relatório de Corte e Falta de Itens Ref {data_referencia}</h1>
+        {tabelas_html}
+        <footer>
+            Mensagem automática, não responda.<br>
+            Desenvolvido pelo TI do Grupo BRF1.
+        </footer>
+    </body>
+    </html>
+    '''
     return corpo_email
-
-
 
 def enviar_email(assunto, corpo, excel_data):
     try:
@@ -133,7 +211,7 @@ def enviar_email(assunto, corpo, excel_data):
 
 
 def verificar_mudancas():
-    if datetime.now().hour == 9 and datetime.now().minute == 24:
+    if datetime.now().hour == 8 and datetime.now().minute == 0:
         logging.info("Iniciando a verificação de corte e falta de itens.")
         try:
             dados_diarios = executar_consulta_sql('sintetico_corte_falta.sql')
@@ -145,7 +223,11 @@ def verificar_mudancas():
             if total_alteracoes > 0:
                 excel_data = gerar_excel_em_memoria(dados_diarios, dados_mes)
                 corpo_email = construir_corpo_email(dados_diarios)
-                assunto_email = f"Relatório de Corte e Falta de Itens - {datetime.now().strftime('%d/%m/%Y')}"
+
+                # Ajuste para obter a data de ontem
+                data_ontem = (datetime.now() - timedelta(days=1)).strftime('%d/%m/%Y')
+                assunto_email = f"Relatório de Corte e Falta de Itens - {data_ontem}"
+
                 enviar_email(assunto_email, corpo_email, excel_data)
                 logging.info("Email enviado com sucesso!")
             else:
