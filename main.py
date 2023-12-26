@@ -10,7 +10,7 @@ from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 import io
 from dotenv import load_dotenv
-from config_bd import SessionLocal
+from config_bd import SessionLocal,session_scope
 
 # Carrega variáveis de ambiente
 load_dotenv()
@@ -31,12 +31,20 @@ ses_client = boto3.client(
     aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY")
 )
 
-def executar_consulta_sql(arquivo_sql):
-    with SessionLocal() as session:
-        with open(arquivo_sql, 'r') as file:
-            query = file.read()
-        result = pd.read_sql(query, session.bind)
-    return result
+def executar_consulta_sql(nome_arquivo_sql):
+    # Construir o caminho completo do arquivo SQL
+    caminho_arquivo_sql = os.path.join(os.getcwd(), "sql", nome_arquivo_sql)
+
+    try:
+        with session_scope() as session:
+            with open(caminho_arquivo_sql, 'r') as file:
+                query = file.read()
+            result = pd.read_sql(query, session.bind)
+        return result
+    except Exception as e:
+        logging.error(f"Erro ao executar consulta SQL: {e}")
+        return pd.DataFrame()  # Retorna um DataFrame vazio em caso de erro
+
 
 
 def auto_ajustar_colunas(worksheet):
@@ -52,15 +60,17 @@ def auto_ajustar_colunas(worksheet):
         adjusted_width = (max_length + 2)
         worksheet.column_dimensions[column].width = adjusted_width
 
-def gerar_excel_em_memoria(dados_sintetico, dados_analitico):
+def gerar_excel_em_memoria(dados_sintetico, dados_analitico, dados_sintetico_mes):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        # Obtendo a data de ontem
+        # Obtendo a data de ontem e o mês atual
         data_ontem = (datetime.now() - pd.Timedelta(days=1)).strftime('%d %m %Y')
+        mes_atual = datetime.now().strftime('%B')  # Mês atual em formato textual
 
         # Nomeando as abas
         nome_aba_sintetico = f"Sintético ({data_ontem})"
         nome_aba_analitico = f"Analítico ({data_ontem})"
+        nome_aba_sintetico_mes = f"Sintético {mes_atual}"  # Nome da aba com mês atual
 
         # Dados sintéticos
         dados_sintetico.to_excel(writer, sheet_name=nome_aba_sintetico, index=False)
@@ -70,9 +80,15 @@ def gerar_excel_em_memoria(dados_sintetico, dados_analitico):
         # Dados analíticos
         dados_analitico.to_excel(writer, sheet_name=nome_aba_analitico, index=False)
         auto_ajustar_colunas(wb[nome_aba_analitico])
+
+        # Dados sintéticos do mês
+        dados_sintetico_mes.to_excel(writer, sheet_name=nome_aba_sintetico_mes, index=False)
+        auto_ajustar_colunas(wb[nome_aba_sintetico_mes])
     
     output.seek(0)
     return output
+
+
 
 def formatar_moeda_br(valor):
     return f"R$ {valor:,.2f}".replace(',', 'v').replace('.', ',').replace('v', '.')
@@ -216,12 +232,14 @@ def verificar_mudancas():
         try:
             dados_diarios = executar_consulta_sql('sintetico_corte_falta.sql')
             dados_mes = executar_consulta_sql('analitico_corte_falta.sql')
+            dados_sintetico_mes = executar_consulta_sql('sintetico_corte_falta_mes.sql')
 
             total_alteracoes = dados_diarios['codprod'].nunique()
             logging.info(f"Total de itens com corte e falta detectados: {total_alteracoes}")
 
             if total_alteracoes > 0:
-                excel_data = gerar_excel_em_memoria(dados_diarios, dados_mes)
+                # Passando os novos dados para a função
+                excel_data = gerar_excel_em_memoria(dados_diarios, dados_mes, dados_sintetico_mes)
                 corpo_email = construir_corpo_email(dados_diarios)
 
                 # Ajuste para obter a data de ontem
@@ -236,6 +254,7 @@ def verificar_mudancas():
             logging.info("Verificação de corte e falta de itens concluída com sucesso.")
         except Exception as e:
             logging.error(f"Erro ao processar os dados: {e}")
+
 
 
 # Loop principal
