@@ -229,7 +229,7 @@ def enviar_email(assunto, corpo, excel_data):
 
 
 def verificar_mudancas():
-    if datetime.now().hour == 8 and datetime.now().minute == 51:
+    if datetime.now().hour == 8 and datetime.now().minute == 0:
         logging.info("Iniciando a verificação de corte e falta de itens.")
         try:
             dados_diarios = executar_consulta_sql('sintetico_corte_falta.sql')
