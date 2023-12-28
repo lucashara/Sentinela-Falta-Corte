@@ -28,6 +28,7 @@ def session_scope():
     """Provide a transactional scope around a series of operations."""
     session = SessionLocal()
     try:
+        session.rollback()  # Adicionado como precaução
         yield session
         session.commit()
     except SQLAlchemyError as e:

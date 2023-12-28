@@ -43,7 +43,9 @@ def executar_consulta_sql(nome_arquivo_sql):
         return result
     except Exception as e:
         logging.error(f"Erro ao executar consulta SQL: {e}")
+        # Caso ocorra um erro não relacionado ao SQLAlchemy
         return pd.DataFrame()  # Retorna um DataFrame vazio em caso de erro
+
 
 
 
@@ -227,7 +229,7 @@ def enviar_email(assunto, corpo, excel_data):
 
 
 def verificar_mudancas():
-    if datetime.now().hour == 8 and datetime.now().minute == 0:
+    if datetime.now().hour == 8 and datetime.now().minute == 51:
         logging.info("Iniciando a verificação de corte e falta de itens.")
         try:
             dados_diarios = executar_consulta_sql('sintetico_corte_falta.sql')
