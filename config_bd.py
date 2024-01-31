@@ -1,8 +1,8 @@
 # config_bd.py
-# config_bd.py
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.sql import text
 from contextlib import contextmanager
 from dotenv import load_dotenv
 import os
@@ -18,7 +18,9 @@ engine = create_engine(
         hostname=os.getenv("DB_HOSTNAME"),
         port=os.getenv("DB_PORT"),
         service_name=os.getenv("DB_SERVICE_NAME")
-    )
+    ),
+    # Adiciona pool_pre_ping para verificar a validade da conexão antes de usar
+    pool_pre_ping=True
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -28,7 +30,6 @@ def session_scope():
     """Provide a transactional scope around a series of operations."""
     session = SessionLocal()
     try:
-        session.rollback()  # Adicionado como precaução
         yield session
         session.commit()
     except SQLAlchemyError as e:

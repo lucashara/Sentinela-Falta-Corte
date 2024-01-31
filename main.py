@@ -10,7 +10,7 @@ from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 import io
 from dotenv import load_dotenv
-from config_bd import SessionLocal,session_scope
+from config_bd import SessionLocal,session_scope,text
 
 # Carrega variáveis de ambiente
 load_dotenv()
@@ -32,21 +32,28 @@ ses_client = boto3.client(
 )
 
 def executar_consulta_sql(nome_arquivo_sql):
-    # Construir o caminho completo do arquivo SQL
     caminho_arquivo_sql = os.path.join(os.getcwd(), "sql", nome_arquivo_sql)
 
     try:
         with session_scope() as session:
             with open(caminho_arquivo_sql, 'r') as file:
-                query = file.read()
-            result = pd.read_sql(query, session.bind)
-        return result
+                raw_sql = file.read()
+            query = text(raw_sql)
+            result = session.execute(query)
+            
+            # Verifica se há resultados na consulta
+            rows = result.fetchall()
+            if rows:
+                df = pd.DataFrame(rows)
+                df.columns = result.keys()
+            else:
+                # Se não houver resultados, cria um DataFrame vazio com colunas apropriadas
+                df = pd.DataFrame(columns=result.keys())
+
+        return df
     except Exception as e:
         logging.error(f"Erro ao executar consulta SQL: {e}")
-        # Caso ocorra um erro não relacionado ao SQLAlchemy
         return pd.DataFrame()  # Retorna um DataFrame vazio em caso de erro
-
-
 
 
 def auto_ajustar_colunas(worksheet):
@@ -236,7 +243,7 @@ def verificar_mudancas():
             dados_mes = executar_consulta_sql('analitico_corte_falta.sql')
             dados_sintetico_mes = executar_consulta_sql('sintetico_corte_falta_mes.sql')
 
-            total_alteracoes = dados_diarios['codprod'].nunique()
+            total_alteracoes = dados_diarios.get('codprod', pd.Series()).nunique()
             logging.info(f"Total de itens com corte e falta detectados: {total_alteracoes}")
 
             if total_alteracoes > 0:
@@ -256,7 +263,6 @@ def verificar_mudancas():
             logging.info("Verificação de corte e falta de itens concluída com sucesso.")
         except Exception as e:
             logging.error(f"Erro ao processar os dados: {e}")
-
 
 
 # Loop principal
