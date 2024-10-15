@@ -30,7 +30,7 @@ logging.basicConfig(
         logging.FileHandler("Sentinela-Corte-Falta.log", "a", encoding="utf-8"),
         logging.StreamHandler(),
     ],
-    level=logging.INFO,
+    level=logging.INFO,  # Mantenha o nível INFO para mensagens importantes
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%d/%m/%Y %H:%M:%S",
 )
@@ -44,7 +44,7 @@ ses_client = boto3.client(
 )
 
 # Agendamento de execuções
-# Dias: 0=Segunda, 6=Domingo
+# Apenas dias úteis às 08:00
 agenda = [
     {"dias": [0, 1, 2, 3, 4], "horario": dt_time(8, 0)},  # Dias de semana às 08:00
 ]
@@ -67,9 +67,11 @@ def executar_consulta_sql(nome_arquivo_sql):
             rows = result.fetchall()
             if rows:
                 df = pd.DataFrame(rows)
-                df.columns = result.keys()
+                df.columns = [
+                    col.upper() for col in result.keys()
+                ]  # Normalizar colunas para maiúsculas
             else:
-                df = pd.DataFrame(columns=result.keys())
+                df = pd.DataFrame(columns=[col.upper() for col in result.keys()])
 
         return df
     except Exception as e:
@@ -78,6 +80,9 @@ def executar_consulta_sql(nome_arquivo_sql):
 
 
 def normalize_columns(df):
+    """
+    Normaliza os nomes das colunas para maiúsculas e remove espaços em branco.
+    """
     df.columns = [col.strip().upper() for col in df.columns]
     return df
 
@@ -118,7 +123,8 @@ def formatar_colunas_moeda(worksheet, colunas):
                 min_col=idx + 1, max_col=idx + 1, min_row=2
             ):
                 for c in cell:
-                    c.number_format = "R$ #,##0.00"
+                    if isinstance(c.value, (int, float)):
+                        c.number_format = "R$ #,##0.00"
 
 
 def gerar_excel_em_memoria(
@@ -196,6 +202,8 @@ def construir_corpo_email(dados_ontem, dados_mes, data_hora_atual):
     """
     Constrói o corpo do e-mail em HTML, incluindo estilos e tabelas formatadas.
     """
+    mes_atual_nome = datetime.now().strftime("%B").capitalize()
+
     estilo_corpo = """
     <style>
         body {
@@ -215,9 +223,18 @@ def construir_corpo_email(dados_ontem, dados_mes, data_hora_atual):
             margin-top: 20px;
             text-align: center;
         }
+        .container-secao {
+            margin: 20px 0;
+        }
+        .container-tabelas {
+            display: block;
+            margin: 0 auto;
+            width: 90%;
+        }
         table {
-            width: 60%;
-            margin: 20px auto;
+            width: 100%;
+            max-width: 800px;
+            margin: 10px auto;
             border-collapse: collapse;
             border-radius: 10px;
             overflow: hidden;
@@ -230,6 +247,7 @@ def construir_corpo_email(dados_ontem, dados_mes, data_hora_atual):
         th {
             background-color: #282248;
             color: white;
+            text-transform: uppercase;
         }
         tr:nth-child(even) {
             background-color: #f2f2f2;
@@ -237,9 +255,14 @@ def construir_corpo_email(dados_ontem, dados_mes, data_hora_atual):
         tr:hover {
             background-color: #ddd;
         }
-        .quantidade, .valor {
+        .qt, .valor {
             font-weight: bold;
             color: red;
+        }
+        .total {
+            font-weight: bold;
+            /* Removido background-color: #FFD700; */
+            text-transform: uppercase;
         }
         .mensagem-positiva {
             text-align: center;
@@ -247,21 +270,69 @@ def construir_corpo_email(dados_ontem, dados_mes, data_hora_atual):
             color: green;
             font-weight: bold;
         }
+        .rank-tabela {
+            margin: 20px auto;
+            width: 80%;
+        }
     </style>
     """
 
     # Gerar tabelas
-    tabela_ontem_html = gerar_tabela_html(
-        dados_ontem, "Resumo de Corte e Falta de Ontem"
+    tabela_corte_ontem_html = gerar_tabela_individual_html(
+        dados_ontem, "Corte de Ontem"
     )
-    tabela_mes_html = gerar_tabela_html(dados_mes, "Resumo Acumulado do Mês Atual")
+    tabela_falta_ontem_html = gerar_tabela_individual_html_falta(
+        dados_ontem, "Falta de Ontem"
+    )
+
+    tabela_corte_mes_html = gerar_tabela_individual_html(
+        dados_mes, f"Corte do Mês {mes_atual_nome}"
+    )
+    tabela_falta_mes_html = gerar_tabela_individual_html_falta(
+        dados_mes, f"Falta do Mês {mes_atual_nome}"
+    )
+
+    # Gerar rankings
+    rank_ontem_html = gerar_rank_html(
+        dados_ontem, "Top 5 Produtos com Maior Valor de Corte Ontem"
+    )
+    rank_mes_html = gerar_rank_html(
+        dados_mes, f"Top 5 Produtos com Maior Valor de Corte no Mês de {mes_atual_nome}"
+    )
+
+    # Mensagem adicional
+    mensagem_adicional = "<p>Segue planilha em anexo.</p>"
 
     corpo_email = f"""
     {estilo_corpo}
     <div>
-        <h1>Relatório de Corte e Falta de Itens - {data_hora_atual}</h1>
-        {tabela_ontem_html}
-        {tabela_mes_html}
+        <h1>Relatório de Corte e Falta de Itens</h1>
+        
+        <div class='container-secao'>
+            <h2>Ontem ({(datetime.now() - timedelta(days=1)).strftime('%d/%m/%Y')})</h2>
+            <div class='container-tabelas'>
+                {tabela_corte_ontem_html}
+                {tabela_falta_ontem_html}
+            </div>
+        </div>
+        
+        <div class='container-secao'>
+            <h2>Acumulado {mes_atual_nome}</h2>
+            <div class='container-tabelas'>
+                {tabela_corte_mes_html}
+                {tabela_falta_mes_html}
+            </div>
+        </div>
+        
+        <div class='rank-tabela'>
+            {rank_ontem_html}
+        </div>
+        <div class='rank-tabela'>
+            {rank_mes_html}
+        </div>
+        
+        {mensagem_adicional}
+        
         <div class='footer'>
             <p><em>Este é um e-mail automático. Por favor, não responda.<br>Atenciosamente, Equipe de TI - Grupo BRF1.</em></p>
         </div>
@@ -270,9 +341,9 @@ def construir_corpo_email(dados_ontem, dados_mes, data_hora_atual):
     return corpo_email
 
 
-def gerar_tabela_html(dados, titulo):
+def gerar_tabela_individual_html(dados, titulo):
     """
-    Gera o código HTML para a tabela de resumo, incluindo total de quantidade e valor.
+    Gera o código HTML para a tabela individual de Corte, incluindo total.
     """
     if dados.empty:
         return "<p class='mensagem-positiva'>Nenhum dado encontrado para esta consulta. Tudo está em ordem!</p>"
@@ -286,52 +357,140 @@ def gerar_tabela_html(dados, titulo):
         .agg(
             QT_CORTE=("QT_CORTE", "sum"),
             PVENDA_CORTE=("PVENDA_CORTE", "sum"),
-            QT_FALTA=("QT_FALTA", "sum"),
-            PVENDA_FALTA=("PVENDA_FALTA", "sum"),
         )
         .reset_index()
     )
 
-    # Calcular totais gerais
+    # Calcular totais
     total_qt_corte = agrupados["QT_CORTE"].sum()
     total_pvenda_corte = agrupados["PVENDA_CORTE"].sum()
-    total_qt_falta = agrupados["QT_FALTA"].sum()
-    total_pvenda_falta = agrupados["PVENDA_FALTA"].sum()
 
     # Construir HTML da tabela
-    colunas_html = "<th>Filial</th><th>Tipo</th><th>Quantidade</th><th>Valor (R$)</th>"
+    colunas_html = "<th>FILIAL</th><th>QT</th><th>VALOR (R$)</th>"
     linhas_html = ""
 
     for _, row in agrupados.iterrows():
         filial_nome = nome_filial(row["CODFILIAL"])
         linhas_html += f"""
         <tr>
-            <td rowspan="2">{filial_nome}</td>
-            <td>Corte</td>
-            <td class='quantidade'>{int(row['QT_CORTE'])}</td>
+            <td>{filial_nome}</td>
+            <td class='qt'>{int(row['QT_CORTE'])}</td>
             <td class='valor'>{formatar_como_moeda(row['PVENDA_CORTE'])}</td>
         </tr>
+        """
+
+    # Adicionar total
+    linhas_html += f"""
+    <tr class='total'>
+        <td>TOTAL</td>
+        <td class='qt'>{int(total_qt_corte)}</td>
+        <td class='valor'>{formatar_como_moeda(total_pvenda_corte)}</td>
+    </tr>
+    """
+
+    tabela_html = f"""
+    <h3>{titulo}</h3>
+    <table>
+        <tr>{colunas_html}</tr>
+        {linhas_html}
+    </table>
+    """
+    return tabela_html
+
+
+def gerar_tabela_individual_html_falta(dados, titulo):
+    """
+    Gera o código HTML para a tabela individual de Falta, incluindo total.
+    """
+    if dados.empty:
+        return "<p class='mensagem-positiva'>Nenhum dado encontrado para esta consulta. Tudo está em ordem!</p>"
+
+    dados = normalize_columns(dados)
+    dados["CODFILIAL"] = dados["CODFILIAL"].astype(str)
+
+    # Agrupar dados por filial
+    agrupados = (
+        dados.groupby("CODFILIAL")
+        .agg(
+            QT_FALTA=("QT_FALTA", "sum"),
+            PVENDA_FALTA=("PVENDA_FALTA", "sum"),
+        )
+        .reset_index()
+    )
+
+    # Calcular totais
+    total_qt_falta = agrupados["QT_FALTA"].sum()
+    total_pvenda_falta = agrupados["PVENDA_FALTA"].sum()
+
+    # Construir HTML da tabela
+    colunas_html = "<th>FILIAL</th><th>QT</th><th>VALOR (R$)</th>"
+    linhas_html = ""
+
+    for _, row in agrupados.iterrows():
+        filial_nome = nome_filial(row["CODFILIAL"])
+        linhas_html += f"""
         <tr>
-            <td>Falta</td>
-            <td class='quantidade'>{int(row['QT_FALTA'])}</td>
+            <td>{filial_nome}</td>
+            <td class='qt'>{int(row['QT_FALTA'])}</td>
             <td class='valor'>{formatar_como_moeda(row['PVENDA_FALTA'])}</td>
         </tr>
         """
 
-    # Adicionar total geral
+    # Adicionar total
     linhas_html += f"""
-    <tr style='font-weight:bold;'>
-        <td rowspan="2">Total Geral</td>
-        <td>Corte</td>
-        <td class='quantidade'>{int(total_qt_corte)}</td>
-        <td class='valor'>{formatar_como_moeda(total_pvenda_corte)}</td>
-    </tr>
-    <tr style='font-weight:bold;'>
-        <td>Falta</td>
-        <td class='quantidade'>{int(total_qt_falta)}</td>
+    <tr class='total'>
+        <td>TOTAL</td>
+        <td class='qt'>{int(total_qt_falta)}</td>
         <td class='valor'>{formatar_como_moeda(total_pvenda_falta)}</td>
     </tr>
     """
+
+    tabela_html = f"""
+    <h3>{titulo}</h3>
+    <table>
+        <tr>{colunas_html}</tr>
+        {linhas_html}
+    </table>
+    """
+    return tabela_html
+
+
+def gerar_rank_html(dados, titulo):
+    """
+    Gera o código HTML para o ranking dos top 5 produtos com maior valor de corte.
+    """
+    if dados.empty:
+        return ""
+
+    dados = normalize_columns(dados)
+
+    # Filtrar produtos com corte
+    dados_corte = dados[dados["QT_CORTE"] > 0]
+
+    if dados_corte.empty:
+        return ""
+
+    # Agrupar por produto
+    rank = (
+        dados_corte.groupby(["CODPROD", "DESCRICAO"])
+        .agg(QT_CORTE=("QT_CORTE", "sum"), PVENDA_CORTE=("PVENDA_CORTE", "sum"))
+        .reset_index()
+        .sort_values(by="PVENDA_CORTE", ascending=False)
+        .head(5)
+    )
+
+    # Construir HTML da tabela de ranking sem a coluna RANK
+    colunas_html = "<th>CÓDIGO PRODUTO</th><th>DESCRIÇÃO</th><th>QT</th><th>VALOR DE CORTE (R$)</th>"
+    linhas_html = ""
+    for row in rank.itertuples(index=False):
+        linhas_html += f"""
+        <tr>
+            <td>{row.CODPROD}</td>
+            <td>{row.DESCRICAO}</td>
+            <td class='qt'>{int(row.QT_CORTE)}</td>
+            <td class='valor'>{formatar_como_moeda(row.PVENDA_CORTE)}</td>
+        </tr>
+        """
 
     tabela_html = f"""
     <h2>{titulo}</h2>
@@ -359,7 +518,7 @@ def enviar_email(assunto, corpo, excel_data):
         msg.attach(MIMEText(corpo, "html", "utf-8"))
 
         nome_arquivo_excel = (
-            f"Relatório de Corte e Falta {datetime.now().strftime('%d %m %Y')}.xlsx"
+            f"Relatório de Corte e Falta {datetime.now().strftime('%d_%m_%Y')}.xlsx"
         )
         part = MIMEApplication(excel_data.read(), _subtype="xlsx")
         part.add_header(
@@ -394,6 +553,31 @@ def verificar_corte_falta():
         dados_sintetico_mes = normalize_columns(dados_sintetico_mes)
         dados_analitico_corte = normalize_columns(dados_analitico_corte)
         dados_analitico_falta = normalize_columns(dados_analitico_falta)
+
+        # Converter colunas de valor para float, se ainda não estiverem
+        for df in [
+            dados_sintetico,
+            dados_sintetico_mes,
+            dados_analitico_corte,
+            dados_analitico_falta,
+        ]:
+            for col in ["PVENDA_CORTE", "PVENDA_FALTA"]:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+
+                    # Verificações Condicionais
+                    # Supondo que o tipo esperado é float64
+                    if df[col].dtype != "float64":
+                        logging.warning(
+                            f"Tipo inesperado para a coluna {col}: {df[col].dtype}. Esperado: float64."
+                        )
+
+                    # Verificar se há valores nulos (depois do fillna)
+                    nulos = df[col].isnull().sum()
+                    if nulos > 0:
+                        logging.warning(
+                            f"A coluna {col} possui {nulos} valores nulos após a conversão."
+                        )
 
         # Logs com análise de ontem
         if not dados_sintetico.empty:
@@ -435,9 +619,9 @@ def verificar_corte_falta():
                 dados_analitico_falta,
             )
 
-            data_hora_atual = datetime.now().strftime("%d/%m/%Y %H:%M")
+            # Removido a linha de Data e Hora
             corpo_email = construir_corpo_email(
-                dados_sintetico, dados_sintetico_mes, data_hora_atual
+                dados_sintetico, dados_sintetico_mes, None
             )
 
             # Definindo o assunto do e-mail
