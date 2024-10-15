@@ -9,11 +9,15 @@ SELECT NVL(CORTE.CODFILIAL, FALTA.CODFILIAL)                               AS CO
        -- VALOR DE VENDA DA FALTA
        NVL(FALTA.TOTAL_PVENDA_FALTA, 0)                                    AS PVENDA_FALTA,
 
+       NVL(FALTA.CNT_NUMPED_FALTA, 0)                                      AS COUNT_PED_FALTA,
+
        -- QUANTIDADE DE CORTE
        NVL(CORTE.TOTAL_QT_CORTE, 0)                                        AS QT_CORTE,
 
        -- VALOR DE VENDA DO CORTE
        NVL(CORTE.TOTAL_PVENDA_CORTE, 0)                                    AS PVENDA_CORTE,
+
+       NVL(CORTE.CNT_NUMPED_CORTE, 0)                                      AS COUNT_PED_CORTE,
 
        -- INFORMAÇÕES DE ESTOQUE DIRETAMENTE NO SELECT
        PKG_ESTOQUE.ESTOQUE_DISPONIVEL(PCEST.CODPROD, PCEST.CODFILIAL, 'V') AS DISP,

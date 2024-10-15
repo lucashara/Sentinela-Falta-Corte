@@ -261,7 +261,7 @@ def construir_corpo_email(dados_ontem, dados_mes, data_hora_atual):
         }
         .total {
             font-weight: bold;
-            /* Removido background-color: #FFD700; */
+            /* background-color: #FFD700; */ /* Removido */
             text-transform: uppercase;
         }
         .mensagem-positiva {
@@ -343,7 +343,7 @@ def construir_corpo_email(dados_ontem, dados_mes, data_hora_atual):
 
 def gerar_tabela_individual_html(dados, titulo):
     """
-    Gera o código HTML para a tabela individual de Corte, incluindo total.
+    Gera o código HTML para a tabela individual de Corte, incluindo totais.
     """
     if dados.empty:
         return "<p class='mensagem-positiva'>Nenhum dado encontrado para esta consulta. Tudo está em ordem!</p>"
@@ -356,6 +356,7 @@ def gerar_tabela_individual_html(dados, titulo):
         dados.groupby("CODFILIAL")
         .agg(
             QT_CORTE=("QT_CORTE", "sum"),
+            COUNT_PED_CORTE=("COUNT_PED_CORTE", "sum"),
             PVENDA_CORTE=("PVENDA_CORTE", "sum"),
         )
         .reset_index()
@@ -363,10 +364,11 @@ def gerar_tabela_individual_html(dados, titulo):
 
     # Calcular totais
     total_qt_corte = agrupados["QT_CORTE"].sum()
+    total_count_ped_corte = agrupados["COUNT_PED_CORTE"].sum()
     total_pvenda_corte = agrupados["PVENDA_CORTE"].sum()
 
     # Construir HTML da tabela
-    colunas_html = "<th>FILIAL</th><th>QT</th><th>VALOR (R$)</th>"
+    colunas_html = "<th>FILIAL</th><th>QT UND</th><th>QT PED</th><th>VALOR (R$)</th>"
     linhas_html = ""
 
     for _, row in agrupados.iterrows():
@@ -375,6 +377,7 @@ def gerar_tabela_individual_html(dados, titulo):
         <tr>
             <td>{filial_nome}</td>
             <td class='qt'>{int(row['QT_CORTE'])}</td>
+            <td class='qt'>{int(row['COUNT_PED_CORTE'])}</td>
             <td class='valor'>{formatar_como_moeda(row['PVENDA_CORTE'])}</td>
         </tr>
         """
@@ -384,6 +387,7 @@ def gerar_tabela_individual_html(dados, titulo):
     <tr class='total'>
         <td>TOTAL</td>
         <td class='qt'>{int(total_qt_corte)}</td>
+        <td class='qt'>{int(total_count_ped_corte)}</td>
         <td class='valor'>{formatar_como_moeda(total_pvenda_corte)}</td>
     </tr>
     """
@@ -400,7 +404,7 @@ def gerar_tabela_individual_html(dados, titulo):
 
 def gerar_tabela_individual_html_falta(dados, titulo):
     """
-    Gera o código HTML para a tabela individual de Falta, incluindo total.
+    Gera o código HTML para a tabela individual de Falta, incluindo totais.
     """
     if dados.empty:
         return "<p class='mensagem-positiva'>Nenhum dado encontrado para esta consulta. Tudo está em ordem!</p>"
@@ -413,6 +417,7 @@ def gerar_tabela_individual_html_falta(dados, titulo):
         dados.groupby("CODFILIAL")
         .agg(
             QT_FALTA=("QT_FALTA", "sum"),
+            COUNT_PED_FALTA=("COUNT_PED_FALTA", "sum"),
             PVENDA_FALTA=("PVENDA_FALTA", "sum"),
         )
         .reset_index()
@@ -420,10 +425,11 @@ def gerar_tabela_individual_html_falta(dados, titulo):
 
     # Calcular totais
     total_qt_falta = agrupados["QT_FALTA"].sum()
+    total_count_ped_falta = agrupados["COUNT_PED_FALTA"].sum()
     total_pvenda_falta = agrupados["PVENDA_FALTA"].sum()
 
     # Construir HTML da tabela
-    colunas_html = "<th>FILIAL</th><th>QT</th><th>VALOR (R$)</th>"
+    colunas_html = "<th>FILIAL</th><th>QT UND</th><th>QT PED</th><th>VALOR (R$)</th>"
     linhas_html = ""
 
     for _, row in agrupados.iterrows():
@@ -432,6 +438,7 @@ def gerar_tabela_individual_html_falta(dados, titulo):
         <tr>
             <td>{filial_nome}</td>
             <td class='qt'>{int(row['QT_FALTA'])}</td>
+            <td class='qt'>{int(row['COUNT_PED_FALTA'])}</td>
             <td class='valor'>{formatar_como_moeda(row['PVENDA_FALTA'])}</td>
         </tr>
         """
@@ -441,6 +448,7 @@ def gerar_tabela_individual_html_falta(dados, titulo):
     <tr class='total'>
         <td>TOTAL</td>
         <td class='qt'>{int(total_qt_falta)}</td>
+        <td class='qt'>{int(total_count_ped_falta)}</td>
         <td class='valor'>{formatar_como_moeda(total_pvenda_falta)}</td>
     </tr>
     """
@@ -457,38 +465,67 @@ def gerar_tabela_individual_html_falta(dados, titulo):
 
 def gerar_rank_html(dados, titulo):
     """
-    Gera o código HTML para o ranking dos top 5 produtos com maior valor de corte.
+    Gera o código HTML para o ranking dos top 5 produtos com maior valor de corte ou falta.
+    Inclui QT UND e QT PED nas tabelas de ranking.
     """
     if dados.empty:
         return ""
 
     dados = normalize_columns(dados)
 
-    # Filtrar produtos com corte
-    dados_corte = dados[dados["QT_CORTE"] > 0]
+    # Determinar se é para Corte ou Falta baseado nas colunas disponíveis
+    if "PVENDA_CORTE" in dados.columns:
+        tipo = "Corte"
+        qt_field = "QT_CORTE"
+        count_field = "COUNT_PED_CORTE"
+        valor_field = "PVENDA_CORTE"
+    elif "PVENDA_FALTA" in dados.columns:
+        tipo = "Falta"
+        qt_field = "QT_FALTA"
+        count_field = "COUNT_PED_FALTA"
+        valor_field = "PVENDA_FALTA"
+    else:
+        # Caso não reconheça o tipo, retorna vazio
+        return ""
 
-    if dados_corte.empty:
+    # Filtrar produtos com corte ou falta
+    dados_tipo = dados[dados[qt_field] > 0]
+
+    if dados_tipo.empty:
         return ""
 
     # Agrupar por produto
     rank = (
-        dados_corte.groupby(["CODPROD", "DESCRICAO"])
-        .agg(QT_CORTE=("QT_CORTE", "sum"), PVENDA_CORTE=("PVENDA_CORTE", "sum"))
+        dados_tipo.groupby(["CODPROD", "DESCRICAO"])
+        .agg(
+            **{
+                "QT_UND": (qt_field, "sum"),
+                "QT_PED": (count_field, "sum"),
+                valor_field: (valor_field, "sum"),
+            }
+        )
         .reset_index()
-        .sort_values(by="PVENDA_CORTE", ascending=False)
+        .sort_values(by=valor_field, ascending=False)
         .head(5)
     )
 
-    # Construir HTML da tabela de ranking sem a coluna RANK
-    colunas_html = "<th>CÓDIGO PRODUTO</th><th>DESCRIÇÃO</th><th>QT</th><th>VALOR DE CORTE (R$)</th>"
+    # Construir HTML da tabela de ranking
+    colunas_html = (
+        "<th>CÓDIGO PRODUTO</th><th>DESCRIÇÃO</th><th>QT UND</th><th>QT PED</th><th>VALOR DE CORTE (R$)</th>"
+        if tipo == "Corte"
+        else "<th>CÓDIGO PRODUTO</th><th>DESCRIÇÃO</th><th>QT UND</th><th>QT PED</th><th>VALOR DE FALTA (R$)</th>"
+    )
+    valor_header = "VALOR DE CORTE (R$)" if tipo == "Corte" else "VALOR DE FALTA (R$)"
     linhas_html = ""
     for row in rank.itertuples(index=False):
+        valor = formatar_como_moeda(getattr(row, valor_field))
         linhas_html += f"""
         <tr>
             <td>{row.CODPROD}</td>
             <td>{row.DESCRICAO}</td>
-            <td class='qt'>{int(row.QT_CORTE)}</td>
-            <td class='valor'>{formatar_como_moeda(row.PVENDA_CORTE)}</td>
+            <td class='qt'>{int(row.QT_UND)}</td>
+            <td class='qt'>{int(row.QT_PED)}</td>
+            <td class='valor'>{valor}</td>
         </tr>
         """
 
@@ -582,14 +619,16 @@ def verificar_corte_falta():
         # Logs com análise de ontem
         if not dados_sintetico.empty:
             qt_corte_ontem = int(dados_sintetico["QT_CORTE"].sum())
+            count_ped_corte_ontem = int(dados_sintetico["COUNT_PED_CORTE"].sum())
             valor_corte_ontem = dados_sintetico["PVENDA_CORTE"].sum()
             qt_falta_ontem = int(dados_sintetico["QT_FALTA"].sum())
+            count_ped_falta_ontem = int(dados_sintetico["COUNT_PED_FALTA"].sum())
             valor_falta_ontem = dados_sintetico["PVENDA_FALTA"].sum()
             logging.info(
-                f"Análise de Ontem - Corte: {qt_corte_ontem} itens, Valor: {formatar_como_moeda(valor_corte_ontem)}"
+                f"Análise de Ontem - Corte: {qt_corte_ontem} QT UND, {count_ped_corte_ontem} QT PED, Valor: {formatar_como_moeda(valor_corte_ontem)}"
             )
             logging.info(
-                f"Análise de Ontem - Falta: {qt_falta_ontem} itens, Valor: {formatar_como_moeda(valor_falta_ontem)}"
+                f"Análise de Ontem - Falta: {qt_falta_ontem} QT UND, {count_ped_falta_ontem} QT PED, Valor: {formatar_como_moeda(valor_falta_ontem)}"
             )
         else:
             logging.info("Nenhum dado de corte ou falta encontrado para ontem.")
@@ -597,14 +636,16 @@ def verificar_corte_falta():
         # Logs com análise acumulada do mês
         if not dados_sintetico_mes.empty:
             qt_corte_mes = int(dados_sintetico_mes["QT_CORTE"].sum())
+            count_ped_corte_mes = int(dados_sintetico_mes["COUNT_PED_CORTE"].sum())
             valor_corte_mes = dados_sintetico_mes["PVENDA_CORTE"].sum()
             qt_falta_mes = int(dados_sintetico_mes["QT_FALTA"].sum())
+            count_ped_falta_mes = int(dados_sintetico_mes["COUNT_PED_FALTA"].sum())
             valor_falta_mes = dados_sintetico_mes["PVENDA_FALTA"].sum()
             logging.info(
-                f"Análise Acumulada do Mês - Corte: {qt_corte_mes} itens, Valor: {formatar_como_moeda(valor_corte_mes)}"
+                f"Análise Acumulada do Mês - Corte: {qt_corte_mes} QT UND, {count_ped_corte_mes} QT PED, Valor: {formatar_como_moeda(valor_corte_mes)}"
             )
             logging.info(
-                f"Análise Acumulada do Mês - Falta: {qt_falta_mes} itens, Valor: {formatar_como_moeda(valor_falta_mes)}"
+                f"Análise Acumulada do Mês - Falta: {qt_falta_mes} QT UND, {count_ped_falta_mes} QT PED, Valor: {formatar_como_moeda(valor_falta_mes)}"
             )
         else:
             logging.info("Nenhum dado de corte ou falta encontrado para o mês atual.")
@@ -619,7 +660,7 @@ def verificar_corte_falta():
                 dados_analitico_falta,
             )
 
-            # Removido a linha de Data e Hora
+            # Removida a linha de Data e Hora
             corpo_email = construir_corpo_email(
                 dados_sintetico, dados_sintetico_mes, None
             )
