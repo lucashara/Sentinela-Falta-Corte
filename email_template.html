@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Relatório de Corte e Falta de Produtos</title>
+    <style>
+      body {
+        font-family: Arial, Helvetica, sans-serif;
+        font-size: 16px;
+        margin: 0;
+        padding: 20px;
+        background: #f9f9f9;
+      }
+      header {
+        text-align: center;
+        margin-bottom: 40px;
+      }
+      header h1 {
+        margin: 0;
+      }
+      section {
+        background: #fff;
+        padding: 20px;
+        margin-bottom: 30px;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      }
+      section > h2 {
+        margin: 0 0 14px;
+        border-bottom: 2px solid #282248;
+        padding-bottom: 6px;
+        color: #282248;
+      }
+      h3 {
+        margin: 14px 0 8px;
+      }
+      table {
+        width: 100%;
+        max-width: 600px;
+        border-collapse: collapse;
+        border-radius: 6px;
+        margin: 0 auto 16px;
+        overflow: hidden;
+      }
+      th,
+      td {
+        padding: 8px;
+        text-align: center;
+        border: 1px solid #ddd;
+      }
+      th {
+        background: #282248;
+        color: #fff;
+        text-transform: uppercase;
+      }
+      tr:nth-child(even) {
+        background: #f2f2f2;
+      }
+      .qt,
+      .valor {
+        font-weight: bold;
+        color: #c00;
+      }
+      .total {
+        font-weight: bold;
+        background: #ffeeba;
+        text-transform: uppercase;
+      }
+      .mensagem-positiva {
+        color: green;
+        font-weight: bold;
+        text-align: center;
+      }
+      .legenda {
+        font-size: 14px;
+        margin: 6px 0 14px;
+      }
+      footer {
+        font-size: 14px;
+        color: #666;
+        text-align: center;
+        margin-top: 40px;
+      }
+    </style>
+  </head>
+  <body>
+    <header><h1>Relatório de Corte e Falta de Produtos</h1></header>
+
+    <main>
+      <!-- INDICADORES CORTE -->
+      <section>
+        <h2>Indicadores de Corte</h2>
+        ${section_corte}
+      </section>
+
+      <!-- INDICADORES FALTA -->
+      <section>
+        <h2>Indicadores de Falta</h2>
+        ${section_falta}
+      </section>
+
+      <!-- RANKINGS -->
+      <section>
+        <h2>Top 5 por Filial – Ontem (${data_ontem})</h2>
+        ${rank_ontem_por_filial}
+      </section>
+      <section>
+        <h2>Top 5 por Filial – Mês ${mes_atual_nome}</h2>
+        ${rank_mes_por_filial}
+      </section>
+    </main>
+
+    <footer>
+      <p>Segue planilha em anexo.</p>
+      <p>
+        <em
+          >Este é um e-mail automático. Por favor, não responda.<br />Equipe de
+          TI – Grupo BRF1.</em
+        >
+      </p>
+    </footer>
+  </body>
+</html>
