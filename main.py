@@ -10,18 +10,17 @@ Gera e envia:
 """
 
 # —————————————————— IMPORTS —————————————————— #
-import os, io, time, locale, argparse, logging
+import os, io, time, locale, argparse, logging, smtplib
 from datetime import datetime, timedelta, time as dt_time
 from string import Template
 
 import pandas as pd
-import boto3
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 from email import encoders
 from dotenv import load_dotenv
-from openpyxl.styles import numbers
+from openpyxl.styles import numbers  # noqa: F401
 
 from config_bd import session_scope, text  # helper para Oracle
 
@@ -43,15 +42,14 @@ logging.basicConfig(
     datefmt="%d/%m/%Y %H:%M:%S",
 )
 
-FROM_ADDR = "sentinela_corte_falta@aws.grupobrf1.com"
-DESTS = [d for d in os.getenv("EMAIL_DESTINATARIOS", "").split(";") if d]
+# ------------ SMTP Office 365 ------------
+EMAIL_USER = os.getenv("EMAIL_USER")
+EMAIL_PASS = os.getenv("EMAIL_PASSWORD")
+SMTP_HOST = os.getenv("OFFICE365_SMTP_SERVER", "smtp.office365.com")
+SMTP_PORT = int(os.getenv("OFFICE365_SMTP_PORT", "587"))
 
-ses_client = boto3.client(
-    "ses",
-    region_name="us-east-1",
-    aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-    aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-)
+FROM_ADDR = EMAIL_USER
+DESTS = [d for d in os.getenv("EMAIL_DESTINATARIOS", "").split(";") if d]
 
 AGENDA = [{"dias": [0, 1, 2, 3, 4], "horario": dt_time(8, 0)}]  # dias úteis 08h
 
@@ -88,7 +86,7 @@ normalize = lambda df: df.rename(columns=str.upper)
 def moeda(v: float) -> str:
     try:
         return f"R$ {v:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
-    except:
+    except Exception:
         return "R$ 0,00"
 
 
@@ -143,14 +141,10 @@ def tabelas_benchmark(df_ontem: pd.DataFrame, df_mes: pd.DataFrame, tipo: str) -
 
 # —————————————————— RANK TOP-5 —————————————————— #
 def rank_por_filial(df: pd.DataFrame, periodo: str) -> str:
-    """
-    Gera HTML para o Top-5 de produtos por filial, excluindo
-    produtos com quantidade ou valor zero.
-    """
+    """Top-5 por filial (descarta itens com Qt ou Valor zero)."""
     if df.empty:
         return "<p class='mensagem-positiva'>Sem ranking.</p>"
 
-    # Escolher campos de Corte ou Falta
     if "QT_CORTE" in df.columns:
         qt_field, cnt_field, val_field = "QT_CORTE", "COUNT_PED_CORTE", "PVENDA_CORTE"
     else:
@@ -158,14 +152,9 @@ def rank_por_filial(df: pd.DataFrame, periodo: str) -> str:
 
     html = ""
     for cod in sorted(df["CODFILIAL"].astype(str).unique()):
-        subset = df[df["CODFILIAL"] == cod]
-
-        # Filtra já aqui: QT>0 e VAL>0
-        sel = subset[(subset[qt_field] > 0) & (subset[val_field] > 0)]
+        sel = df[(df["CODFILIAL"] == cod) & (df[qt_field] > 0) & (df[val_field] > 0)]
         if sel.empty:
             continue
-
-        # Agrega e soma
         top = (
             sel.groupby(["CODPROD", "DESCRICAO"])
             .agg(
@@ -174,34 +163,21 @@ def rank_por_filial(df: pd.DataFrame, periodo: str) -> str:
                 VAL=(val_field, "sum"),
             )
             .reset_index()
+            .sort_values("VAL", ascending=False)
+            .head(5)
         )
-        if top.empty:
-            continue
-
-        # Ordena e pega Top 5
-        top = top.sort_values("VAL", ascending=False).head(5)
-
-        # Monta tabela HTML
-        linhas = ""
-        for r in top.itertuples(index=False):
-            linhas += (
-                f"<tr>"
-                f"<td>{r.CODPROD}</td>"
-                f"<td>{r.DESCRICAO}</td>"
-                f"<td class='qt'>{int(r.QT_UND)}</td>"
-                f"<td class='qt'>{int(r.QT_PED)}</td>"
-                f"<td class='valor'>{moeda(r.VAL)}</td>"
-                f"</tr>"
-            )
-
+        linhas = "".join(
+            f"<tr><td>{r.CODPROD}</td><td>{r.DESCRICAO}</td>"
+            f"<td class='qt'>{int(r.QT_UND)}</td><td class='qt'>{int(r.QT_PED)}</td>"
+            f"<td class='valor'>{moeda(r.VAL)}</td></tr>"
+            for r in top.itertuples(index=False)
+        )
         html += (
             f"<div class='filial-block'><h3>Top 5 {periodo} – {label_filial(cod)}</h3>"
-            "<table>"
-            "<tr><th>Código</th><th>Descrição</th><th>Qt Und</th><th>Qt Ped</th><th>Valor</th></tr>"
-            f"{linhas}"
-            "</table></div>"
+            "<table><tr><th>Código</th><th>Descrição</th><th>Qt Und</th>"
+            "<th>Qt Ped</th><th>Valor</th></tr>"
+            f"{linhas}</table></div>"
         )
-
     return html or "<p class='mensagem-positiva'>Sem ranking.</p>"
 
 
@@ -263,14 +239,15 @@ def gerar_xlsx(s_ontem, s_mes, a_c, a_f) -> io.BytesIO:
     return buf
 
 
-# —————————————————— ENVIO —————————————————— #
-def enviar_email(html, xlsx) -> bool:
+# —————————————————— ENVIO (Office 365) —————————————————— #
+def enviar_email(html: str, xlsx: io.BytesIO) -> bool:
     msg = MIMEMultipart()
     msg["From"] = FROM_ADDR
     msg["To"] = ",".join(DESTS)
     msg["Subject"] = f"Relatório Corte/Falta – {datetime.now():%d/%m/%Y}"
     msg["X-Priority"] = "1"
     msg.attach(MIMEText(html, "html", "utf-8"))
+
     part = MIMEApplication(xlsx.read(), _subtype="xlsx")
     part.add_header(
         "Content-Disposition",
@@ -279,13 +256,15 @@ def enviar_email(html, xlsx) -> bool:
     )
     encoders.encode_base64(part)
     msg.attach(part)
+
     try:
-        ses_client.send_raw_email(
-            Source=FROM_ADDR, Destinations=DESTS, RawMessage={"Data": msg.as_string()}
-        )
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as smtp:
+            smtp.starttls()
+            smtp.login(EMAIL_USER, EMAIL_PASS)
+            smtp.sendmail(FROM_ADDR, DESTS, msg.as_string())
         return True
-    except Exception as e:
-        logging.error("SES: %s", e)
+    except Exception as exc:
+        logging.error("Falha no envio SMTP: %s", exc)
         return False
 
 
@@ -310,29 +289,28 @@ def verificar():
     a_corte = normalize(executar_sql("analitico_corte_mes.sql"))
     a_falta = normalize(executar_sql("analitico_falta_mes.sql"))
 
-    # ---------- Resumo numérico no log ----------
-    total = lambda df, col: int(df[col].sum()) if col in df.columns else 0
-    valor = lambda df, col: moeda(df[col].sum()) if col in df.columns else "R$ 0,00"
+    # Resumo no log
+    tot = lambda df, c: int(df[c].sum()) if c in df.columns else 0
+    val = lambda df, c: moeda(df[c].sum()) if c in df.columns else "R$ 0,00"
 
     logging.info(
         "Ontem – Corte: %d und / %d ped / %s | Falta: %d und / %d ped / %s",
-        total(s_ontem, "QT_CORTE"),
-        total(s_ontem, "COUNT_PED_CORTE"),
-        valor(s_ontem, "PVENDA_CORTE"),
-        total(s_ontem, "QT_FALTA"),
-        total(s_ontem, "COUNT_PED_FALTA"),
-        valor(s_ontem, "PVENDA_FALTA"),
+        tot(s_ontem, "QT_CORTE"),
+        tot(s_ontem, "COUNT_PED_CORTE"),
+        val(s_ontem, "PVENDA_CORTE"),
+        tot(s_ontem, "QT_FALTA"),
+        tot(s_ontem, "COUNT_PED_FALTA"),
+        val(s_ontem, "PVENDA_FALTA"),
     )
     logging.info(
         "Mês – Corte: %d und / %d ped / %s | Falta: %d und / %d ped / %s",
-        total(s_mes, "QT_CORTE"),
-        total(s_mes, "COUNT_PED_CORTE"),
-        valor(s_mes, "PVENDA_CORTE"),
-        total(s_mes, "QT_FALTA"),
-        total(s_mes, "COUNT_PED_FALTA"),
-        valor(s_mes, "PVENDA_FALTA"),
+        tot(s_mes, "QT_CORTE"),
+        tot(s_mes, "COUNT_PED_CORTE"),
+        val(s_mes, "PVENDA_CORTE"),
+        tot(s_mes, "QT_FALTA"),
+        tot(s_mes, "COUNT_PED_FALTA"),
+        val(s_mes, "PVENDA_FALTA"),
     )
-    # ---------------------------------------------
 
     if s_ontem.empty and s_mes.empty:
         logging.info("Nenhum dado → e-mail não enviado.")
