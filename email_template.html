@@ -2,122 +2,108 @@
 <html lang="pt-BR">
   <head>
     <meta charset="UTF-8" />
-    <title>Relatório de Corte e Falta de Produtos</title>
+    <title>Sentinela – Corte e Falta</title>
     <style>
       body {
         font-family: Arial, Helvetica, sans-serif;
-        font-size: 16px;
+        font-size: 14px;
+        color: #333;
         margin: 0;
         padding: 20px;
-        background: #f9f9f9;
       }
-      header {
+      h2 {
         text-align: center;
-        margin-bottom: 40px;
-      }
-      header h1 {
-        margin: 0;
-      }
-      section {
-        background: #fff;
-        padding: 20px;
-        margin-bottom: 30px;
-        border-radius: 8px;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-      }
-      section > h2 {
-        margin: 0 0 14px;
-        border-bottom: 2px solid #282248;
-        padding-bottom: 6px;
         color: #282248;
+        margin-bottom: 6px;
       }
       h3 {
-        margin: 14px 0 8px;
+        text-transform: uppercase;
+        text-align: center;
+        color: #484060;
+        margin: 12px 0 8px;
       }
+      .legenda {
+        font-size: 13px;
+        color: #555;
+        text-align: center;
+        margin: 6px 0 14px;
+      }
+      .mensagem-positiva {
+        color: #2e7d32;
+        font-weight: bold;
+        text-align: center;
+      }
+
+      .tblWrap {
+        overflow-x: auto;
+        margin-bottom: 20px;
+      }
+
       table {
+        border-collapse: separate; /* padrão do outro Sentinela */
         width: 100%;
-        max-width: 600px;
-        border-collapse: collapse;
-        border-radius: 6px;
-        margin: 0 auto 16px;
+        min-width: 680px; /* ↓ levemente menor pra não cortar */
+        border: 1px solid #ccc;
+        border-radius: 8px;
         overflow: hidden;
+        margin: 0 auto;
       }
       th,
       td {
+        border: 1px solid #ccc;
         padding: 8px;
         text-align: center;
-        border: 1px solid #ddd;
+        white-space: nowrap;
+        font-size: 13px; /* ↓ leve redução */
       }
       th {
+        text-transform: uppercase;
         background: #282248;
         color: #fff;
-        text-transform: uppercase;
+        font-weight: bold;
       }
       tr:nth-child(even) {
-        background: #f2f2f2;
+        background: #f7f7ff;
       }
-      .qt,
-      .valor {
+      tr:hover {
+        background: #ecf0ff;
+      } /* hover leve; se não suportar, apenas ignora */
+
+      /* “ACIMA” em vermelho (apenas o texto) */
+      tr.ruim td {
+        color: #b30000;
         font-weight: bold;
-        color: #c00;
       }
-      .total {
-        font-weight: bold;
-        background: #ffeeba;
-        text-transform: uppercase;
-      }
-      .mensagem-positiva {
-        color: green;
-        font-weight: bold;
-        text-align: center;
-      }
-      .legenda {
-        font-size: 14px;
-        margin: 6px 0 14px;
-      }
+
       footer {
-        font-size: 14px;
-        color: #666;
+        font-size: 12px;
+        color: #555;
         text-align: center;
-        margin-top: 40px;
+        margin-top: 20px;
       }
     </style>
   </head>
   <body>
-    <header><h1>Relatório de Corte e Falta de Produtos</h1></header>
+    <h2>Sentinela – Corte e Falta (até ${datahora_atual})</h2>
 
-    <main>
-      <!-- INDICADORES CORTE -->
-      <section>
-        <h2>Indicadores de Corte</h2>
-        ${section_corte}
-      </section>
+    <!-- CORTE -->
+    <h3>Indicadores de Corte (Meta fixa 0,03%)</h3>
+    <div class="tblWrap">${section_corte}</div>
 
-      <!-- INDICADORES FALTA -->
-      <section>
-        <h2>Indicadores de Falta</h2>
-        ${section_falta}
-      </section>
+    <!-- FALTA -->
+    <h3>Indicadores de Falta</h3>
+    <div class="tblWrap">${section_falta}</div>
 
-      <!-- RANKINGS -->
-      <section>
-        <h2>Top 5 por Filial – Ontem (${data_ontem})</h2>
-        ${rank_ontem_por_filial}
-      </section>
-      <section>
-        <h2>Top 5 por Filial – Mês ${mes_atual_nome}</h2>
-        ${rank_mes_por_filial}
-      </section>
-    </main>
+    <!-- RANKINGS -->
+    <h3>Top 5 por Filial – Ontem (${datahora_atual})</h3>
+    <div class="tblWrap">${rank_ontem_por_filial}</div>
+
+    <h3>Top 5 por Filial – Mês ${mes_atual_nome}</h3>
+    <div class="tblWrap">${rank_mes_por_filial}</div>
 
     <footer>
-      <p>Segue planilha em anexo.</p>
-      <p>
-        <em
-          >Este é um e-mail automático. Por favor, não responda.<br />Equipe de
-          TI – Grupo BRF1.</em
-        >
-      </p>
+      <p>Este é um e-mail automático – não responda.</p>
+      <p>Equipe de TI – Grupo BRF1</p>
     </footer>
   </body>
 </html>

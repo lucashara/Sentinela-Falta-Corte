@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Sentinela-Corte-Falta  ·  Grupo BRF1
------------------------------------------------------------
+Sentinela – Corte e Falta  ·  Grupo BRF1
+------------------------------------------------------------------
 Gera e envia:
-• Indicadores Corte/Falta (% e desvio vs. média trimestral) – Ontem & Mês
+• Indicadores de CORTE (meta fixa 0,03%) e FALTA (% e desvio vs. média trimestral) – Ontem & Mês
 • Ranking Top-5 produtos por filial
 • Anexo XLSX com formatação contábil
+------------------------------------------------------------------
 """
 
-# —————————————————— IMPORTS —————————————————— #
+# ------------------------------ IMPORTS ------------------------------ #
 import os, io, time, locale, argparse, logging, smtplib
 from datetime import datetime, timedelta, time as dt_time
 from string import Template
@@ -22,9 +23,9 @@ from email import encoders
 from dotenv import load_dotenv
 from openpyxl.styles import numbers  # noqa: F401
 
-from config_bd import session_scope, text  # helper para Oracle
+from config_bd import session_scope, text  # helper p/ Oracle
 
-# —————————————————— CONFIG —————————————————— #
+# ------------------------------ CONFIG ------------------------------ #
 try:
     locale.setlocale(locale.LC_TIME, "pt_BR.UTF-8")
 except locale.Error:
@@ -42,7 +43,7 @@ logging.basicConfig(
     datefmt="%d/%m/%Y %H:%M:%S",
 )
 
-# ------------ SMTP Office 365 ------------
+# SMTP Office 365
 EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PASS = os.getenv("EMAIL_PASSWORD")
 SMTP_HOST = os.getenv("OFFICE365_SMTP_SERVER", "smtp.office365.com")
@@ -51,15 +52,18 @@ SMTP_PORT = int(os.getenv("OFFICE365_SMTP_PORT", "587"))
 FROM_ADDR = EMAIL_USER
 DESTS = [d for d in os.getenv("EMAIL_DESTINATARIOS", "").split(";") if d]
 
-AGENDA = [{"dias": [0, 1, 2, 3, 4], "horario": dt_time(8, 0)}]  # dias úteis 08h
+# Agenda: dias úteis, 08:00
+AGENDA = [{"dias": [0, 1, 2, 3, 4], "horario": dt_time(8, 0)}]
 
 
-# —————————————————— FUNÇÕES BÁSICAS —————————————————— #
+# ------------------------------ DB UTILS ------------------------------ #
 def carregar_template() -> Template:
+    """Carrega o template HTML do e-mail."""
     return Template(open("email_template.html", encoding="utf-8").read())
 
 
 def executar_sql_param(file: str, di: datetime, df: datetime) -> pd.DataFrame:
+    """Executa SQL (./sql) substituindo :DATAI e :DATAF; retorna DataFrame."""
     sql = (
         open(os.path.join("sql", file), encoding="utf-8")
         .read()
@@ -73,6 +77,7 @@ def executar_sql_param(file: str, di: datetime, df: datetime) -> pd.DataFrame:
 
 
 def executar_sql(file: str) -> pd.DataFrame:
+    """Executa SQL estático; retorna DataFrame."""
     with session_scope() as s:
         txt = open(os.path.join("sql", file), encoding="utf-8").read()
         r = s.execute(text(txt))
@@ -83,65 +88,108 @@ def executar_sql(file: str) -> pd.DataFrame:
 normalize = lambda df: df.rename(columns=str.upper)
 
 
+# ------------------------------ FORMATOS ------------------------------ #
 def moeda(v: float) -> str:
+    """Formata número como moeda BR (R$)."""
     try:
         return f"R$ {v:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
     except Exception:
         return "R$ 0,00"
 
 
+# Mantém os rótulos do script original
 label_filial = lambda c: {"1": "F1 PB", "2": "F1 RN", "3": "BR"}.get(
     str(c).strip(), "Outra"
 )
 
 
-# —————————————————— INDICADORES (Benchmarks) —————————————————— #
-def tabelas_benchmark(df_ontem: pd.DataFrame, df_mes: pd.DataFrame, tipo: str) -> str:
-    """Gera HTML p/ indicadores (CORTE | FALTA) usando linha TOTAL devolvida pelo SQL."""
+# ------------------------- TABELAS (ESTRUTURA SENTINELA) ------------------------- #
+def _tabela_indicador(df: pd.DataFrame, tipo: str, titulo_bloco: str) -> str:
+    """
+    Constrói uma <table> para um indicador (CORTE/FALTA) no estilo do outro Sentinela:
+    - Cabeçalho e dados centralizados
+    - Hover leve (quando suportado)
+    - “ACIMA” em vermelho (apenas a fonte)
+    """
     tipo = tipo.upper()
-    col_v = f"PVENDA_{tipo}"
-    col_p = f"PCT_PERIODO_{tipo}"
-    col_d = f"DESVIO_{tipo}"
-    col_mt = f"MEDIA_TRIM_{tipo}"
+    col_v = f"PVENDA_{tipo}"  # valor monetário
+    col_p = f"PCT_PERIODO_{tipo}"  # percentual do período
+    col_d = f"DESVIO_{tipo}"  # ex: “+X,XX% ACIMA” | “-X,XX% ABAIXO”
 
-    def tabela(df: pd.DataFrame, titulo: str) -> str:
-        if df.empty:
-            return "<p class='mensagem-positiva'>Sem dados.</p>"
+    if tipo == "CORTE":
+        valor_hdr = "Valor Cortado (R$)"
+        pct_hdr = "Corte no período (%)"
+        desv_hdr = "Desvio vs. Meta"
+    else:
+        valor_hdr = "Valor em Falta (R$)"
+        pct_hdr = "Falta no período (%)"
+        desv_hdr = "Desvio vs. Trimestre"
 
-        linhas = ""
-        for r in df.itertuples(index=False):
-            css = "total" if str(r.CODFILIAL) == "TOTAL" else ""
-            linhas += (
-                f"<tr class='{css}'>"
-                f"<td>{'TOTAL' if css else label_filial(r.CODFILIAL)}</td>"
-                f"<td class='valor'>{moeda(getattr(r, col_v))}</td>"
-                f"<td class='qt'>{getattr(r, col_p)}</td>"
-                f"<td class='qt'>{getattr(r, col_d)}</td></tr>"
-            )
+    if df.empty:
         return (
-            f"<h3>{titulo}</h3>"
-            "<table><tr><th>Filial</th><th>Valor</th><th>% Período</th><th>Desvio vs. Trim.</th></tr>"
-            f"{linhas}</table>"
+            f"<h3>{titulo_bloco}</h3>"
+            "<div class='tblWrap'><table>"
+            f"<tr><th>Filial</th><th>{valor_hdr}</th><th>{pct_hdr}</th><th>{desv_hdr}</th></tr>"
+            "<tr><td colspan='4'><strong>Sem dados.</strong></td></tr>"
+            "</table></div>"
         )
 
-    # legenda – ignora linha TOTAL
-    leg = ", ".join(
-        f"{label_filial(r.CODFILIAL)}: {getattr(r, col_mt)}"
-        for r in df_mes.itertuples(index=False)
-        if str(r.CODFILIAL) != "TOTAL"
-    )
-    legenda_html = (
-        f"<p class='legenda'><em>Média Trimestral ({tipo.title()}): {leg}</em></p>"
-        if leg
-        else ""
+    html = [f"<h3>{titulo_bloco}</h3><div class='tblWrap'><table>"]
+    html.append(
+        f"<tr><th>Filial</th><th>{valor_hdr}</th><th>{pct_hdr}</th><th>{desv_hdr}</th></tr>"
     )
 
-    return tabela(df_ontem, "Ontem") + legenda_html + tabela(df_mes, "Mês Atual")
+    for _, r in df.iterrows():
+        cod = r["CODFILIAL"]
+        filial = "TOTAL" if str(cod) == "TOTAL" else label_filial(cod)
+        val = moeda(r[col_v]) if col_v in r else "R$ 0,00"
+        pct = r[col_p] if col_p in r and r[col_p] is not None else "0,00%"
+        des = r[col_d] if col_d in r and r[col_d] is not None else "0%"
+
+        # “ACIMA” => ruim → cor da fonte vermelha
+        cls = "ruim" if "ACIMA" in str(des).upper() else ""
+        tr_open = f"<tr class='{cls}'>" if cls else "<tr>"
+        html.append(
+            tr_open
+            + f"<td>{filial}</td>"
+            + f"<td>{val}</td>"
+            + f"<td>{pct}</td>"
+            + f"<td>{des}</td>"
+            + "</tr>"
+        )
+
+    html.append("</table></div>")
+    return "".join(html)
 
 
-# —————————————————— RANK TOP-5 —————————————————— #
+def tabelas_benchmark(df_ontem: pd.DataFrame, df_mes: pd.DataFrame, tipo: str) -> str:
+    """Produz blocos (Ontem / Mês Atual) no padrão Sentinela."""
+    bloco_ontem = _tabela_indicador(df_ontem, tipo, "Ontem")
+    bloco_mes = _tabela_indicador(df_mes, tipo, "Mês Atual")
+    # Legenda específica
+    if tipo.upper() == "CORTE":
+        legenda = "<p class='legenda'><em>Meta de Corte: 0,03%</em></p>"
+    else:
+        if not df_mes.empty and "MEDIA_TRIM_FALTA" in df_mes.columns:
+            pares = []
+            for _, rr in df_mes.iterrows():
+                if str(rr["CODFILIAL"]) != "TOTAL":
+                    pares.append(
+                        f"{label_filial(rr['CODFILIAL'])}: {rr['MEDIA_TRIM_FALTA']}"
+                    )
+            legenda = (
+                f"<p class='legenda'><em>Média Trimestral por Filial (Falta): {', '.join(pares)}</em></p>"
+                if pares
+                else ""
+            )
+        else:
+            legenda = ""
+    return bloco_ontem + legenda + bloco_mes
+
+
+# ------------------------------ RANKING ------------------------------ #
 def rank_por_filial(df: pd.DataFrame, periodo: str) -> str:
-    """Top-5 por filial (descarta itens com Qt ou Valor zero)."""
+    """Top-5 por filial (centralizado; valores formatados)."""
     if df.empty:
         return "<p class='mensagem-positiva'>Sem ranking.</p>"
 
@@ -150,13 +198,14 @@ def rank_por_filial(df: pd.DataFrame, periodo: str) -> str:
     else:
         qt_field, cnt_field, val_field = "QT_FALTA", "COUNT_PED_FALTA", "PVENDA_FALTA"
 
-    html = ""
+    html = []
     for cod in sorted(df["CODFILIAL"].astype(str).unique()):
-        sel = df[(df["CODFILIAL"] == cod) & (df[qt_field] > 0) & (df[val_field] > 0)]
-        if sel.empty:
+        grp = df[(df["CODFILIAL"] == cod) & (df[qt_field] > 0) & (df[val_field] > 0)]
+        if grp.empty:
             continue
+
         top = (
-            sel.groupby(["CODPROD", "DESCRICAO"])
+            grp.groupby(["CODPROD", "DESCRICAO"])
             .agg(
                 QT_UND=(qt_field, "sum"),
                 QT_PED=(cnt_field, "sum"),
@@ -166,28 +215,39 @@ def rank_por_filial(df: pd.DataFrame, periodo: str) -> str:
             .sort_values("VAL", ascending=False)
             .head(5)
         )
-        linhas = "".join(
-            f"<tr><td>{r.CODPROD}</td><td>{r.DESCRICAO}</td>"
-            f"<td class='qt'>{int(r.QT_UND)}</td><td class='qt'>{int(r.QT_PED)}</td>"
-            f"<td class='valor'>{moeda(r.VAL)}</td></tr>"
-            for r in top.itertuples(index=False)
+
+        html.append(f"<h3>{label_filial(cod)}</h3><div class='tblWrap'><table>")
+        html.append(
+            "<tr><th>Código</th><th>Descrição</th><th>Qt Und</th><th>Qt Ped</th><th>Valor</th></tr>"
         )
-        html += (
-            f"<div class='filial-block'><h3>Top 5 {periodo} – {label_filial(cod)}</h3>"
-            "<table><tr><th>Código</th><th>Descrição</th><th>Qt Und</th>"
-            "<th>Qt Ped</th><th>Valor</th></tr>"
-            f"{linhas}</table></div>"
-        )
-    return html or "<p class='mensagem-positiva'>Sem ranking.</p>"
+        for r in top.itertuples(index=False):
+            html.append(
+                "<tr>"
+                f"<td>{r.CODPROD}</td>"
+                f"<td>{r.DESCRICAO}</td>"
+                f"<td>{int(r.QT_UND)}</td>"
+                f"<td>{int(r.QT_PED)}</td>"
+                f"<td>{moeda(r.VAL)}</td>"
+                "</tr>"
+            )
+        html.append("</table></div>")
+    return "".join(html) or "<p class='mensagem-positiva'>Sem ranking.</p>"
 
 
-# —————————————————— CORPO DO E-MAIL —————————————————— #
-def corpo_email(bmk_ontem, bmk_mes, s_ontem, s_mes) -> str:
+# ------------------------------ CORPO DO E-MAIL ------------------------------ #
+def corpo_email(
+    bmk_ontem: pd.DataFrame,
+    bmk_mes: pd.DataFrame,
+    s_ontem: pd.DataFrame,
+    s_mes: pd.DataFrame,
+) -> str:
+    """Monta o HTML final do e-mail."""
     tpl = carregar_template()
-    ontem = (datetime.now() - timedelta(days=1)).strftime("%d/%m/%Y")
+    agora = datetime.now().strftime("%d/%m/%Y %H:%M")
     mes_nome = datetime.now().strftime("%B").capitalize()
+
     return tpl.substitute(
-        data_ontem=ontem,
+        datahora_atual=agora,
         mes_atual_nome=mes_nome,
         section_corte=tabelas_benchmark(bmk_ontem, bmk_mes, "CORTE"),
         section_falta=tabelas_benchmark(bmk_ontem, bmk_mes, "FALTA"),
@@ -196,7 +256,7 @@ def corpo_email(bmk_ontem, bmk_mes, s_ontem, s_mes) -> str:
     )
 
 
-# —————————————————— EXCEL (formatação contábil) —————————————————— #
+# ------------------------------ EXCEL ------------------------------ #
 def _auto(ws):
     for col in ws.columns:
         ws.column_dimensions[col[0].column_letter].width = (
@@ -239,12 +299,14 @@ def gerar_xlsx(s_ontem, s_mes, a_c, a_f) -> io.BytesIO:
     return buf
 
 
-# —————————————————— ENVIO (Office 365) —————————————————— #
+# ------------------------------ ENVIO ------------------------------ #
 def enviar_email(html: str, xlsx: io.BytesIO) -> bool:
+    """Envia e-mail via SMTP Office 365 com o HTML e anexo XLSX."""
     msg = MIMEMultipart()
     msg["From"] = FROM_ADDR
     msg["To"] = ",".join(DESTS)
-    msg["Subject"] = f"Relatório Corte/Falta – {datetime.now():%d/%m/%Y}"
+    # Assunto conforme solicitado
+    msg["Subject"] = f"Sentinela · Corte e Falta - {datetime.now():%d/%m/%Y}"
     msg["X-Priority"] = "1"
     msg.attach(MIMEText(html, "html", "utf-8"))
 
@@ -252,7 +314,7 @@ def enviar_email(html: str, xlsx: io.BytesIO) -> bool:
     part.add_header(
         "Content-Disposition",
         "attachment",
-        filename=f"Relatório_Corte_Falta_{datetime.now():%d_%m_%Y}.xlsx",
+        filename=f"Sentinela_Corte_e_Falta_{datetime.now():%Y%m%d}.xlsx",
     )
     encoders.encode_base64(part)
     msg.attach(part)
@@ -268,13 +330,14 @@ def enviar_email(html: str, xlsx: io.BytesIO) -> bool:
         return False
 
 
-# —————————————————— ROTINA PRINCIPAL —————————————————— #
+# ------------------------------ ROTINA PRINCIPAL ------------------------------ #
 def verificar():
     logging.info("=== Início verificação ===")
 
     ontem = datetime.now() - timedelta(days=1)
     mes_ini = datetime.now().replace(day=1)
 
+    # Benchmarks (SQL: CORTE com meta fixa 0,03%; FALTA com média trimestral)
     bmk_ontem = normalize(
         executar_sql_param("relatorio_corte_falta_benchmark.sql", ontem, ontem)
     )
@@ -284,15 +347,15 @@ def verificar():
         )
     )
 
+    # Sintético & Analítico
     s_ontem = normalize(executar_sql("sintetico_corte_falta.sql"))
     s_mes = normalize(executar_sql("sintetico_corte_falta_mes.sql"))
     a_corte = normalize(executar_sql("analitico_corte_mes.sql"))
     a_falta = normalize(executar_sql("analitico_falta_mes.sql"))
 
-    # Resumo no log
+    # Log resumo
     tot = lambda df, c: int(df[c].sum()) if c in df.columns else 0
     val = lambda df, c: moeda(df[c].sum()) if c in df.columns else "R$ 0,00"
-
     logging.info(
         "Ontem – Corte: %d und / %d ped / %s | Falta: %d und / %d ped / %s",
         tot(s_ontem, "QT_CORTE"),
@@ -325,8 +388,9 @@ def verificar():
     logging.info("=== Fim verificação ===")
 
 
-# —————————————————— SCHEDULER —————————————————— #
-def _proximo():
+# ------------------------------ SCHEDULER / CLI ------------------------------ #
+def _proximo() -> datetime:
+    """Calcula próxima execução com base na AGENDA (dias úteis 08:00)."""
     agora = datetime.now()
     prox = None
     for cfg in AGENDA:
@@ -349,9 +413,8 @@ def _loop():
         verificar()
 
 
-# —————————————————— CLI —————————————————— #
 def main():
-    ap = argparse.ArgumentParser(description="Sentinela Corte/Falta")
+    ap = argparse.ArgumentParser(description="Sentinela – Corte e Falta")
     ap.add_argument("--modo", choices=["manual", "diario"], required=True)
     if ap.parse_args().modo == "manual":
         logging.info("Modo MANUAL")
