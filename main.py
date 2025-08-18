@@ -106,7 +106,7 @@ label_filial = lambda c: {"1": "F1 PB", "2": "F1 RN", "3": "BR"}.get(
 # ------------------------- TABELAS (ESTRUTURA SENTINELA) ------------------------- #
 def _tabela_indicador(df: pd.DataFrame, tipo: str, titulo_bloco: str) -> str:
     """
-    Constrói uma <table> para um indicador (CORTE/FALTA) no estilo do outro Sentinela:
+    Constrói uma <table> para um indicador (CORTE/FALTA):
     - Cabeçalho e dados centralizados
     - Hover leve (quando suportado)
     - “ACIMA” em vermelho (apenas a fonte)
@@ -163,7 +163,7 @@ def _tabela_indicador(df: pd.DataFrame, tipo: str, titulo_bloco: str) -> str:
 
 
 def tabelas_benchmark(df_ontem: pd.DataFrame, df_mes: pd.DataFrame, tipo: str) -> str:
-    """Produz blocos (Ontem / Mês Atual) no padrão Sentinela."""
+    """Produz blocos (Ontem / Mês Atual)."""
     bloco_ontem = _tabela_indicador(df_ontem, tipo, "Ontem")
     bloco_mes = _tabela_indicador(df_mes, tipo, "Mês Atual")
     # Legenda específica
@@ -330,6 +330,24 @@ def enviar_email(html: str, xlsx: io.BytesIO) -> bool:
         return False
 
 
+# ------------------------------ REGRAS DE ENVIO ------------------------------ #
+def _tem_movimento(df: pd.DataFrame, qty_col: str, cnt_col: str, val_col: str) -> bool:
+    """Retorna True se houver qualquer movimento (>0) em quantidade, pedidos ou valor."""
+    tem_qt = (
+        qty_col in df.columns
+        and pd.to_numeric(df[qty_col], errors="coerce").fillna(0).sum() > 0
+    )
+    tem_ped = (
+        cnt_col in df.columns
+        and pd.to_numeric(df[cnt_col], errors="coerce").fillna(0).sum() > 0
+    )
+    tem_val = (
+        val_col in df.columns
+        and pd.to_numeric(df[val_col], errors="coerce").fillna(0).sum() > 0
+    )
+    return tem_qt or tem_ped or tem_val
+
+
 # ------------------------------ ROTINA PRINCIPAL ------------------------------ #
 def verificar():
     logging.info("=== Início verificação ===")
@@ -353,9 +371,18 @@ def verificar():
     a_corte = normalize(executar_sql("analitico_corte_mes.sql"))
     a_falta = normalize(executar_sql("analitico_falta_mes.sql"))
 
-    # Log resumo
-    tot = lambda df, c: int(df[c].sum()) if c in df.columns else 0
-    val = lambda df, c: moeda(df[c].sum()) if c in df.columns else "R$ 0,00"
+    # Resumo no log (ontem e mês)
+    tot = lambda df, c: (
+        int(pd.to_numeric(df[c], errors="coerce").fillna(0).sum())
+        if c in df.columns
+        else 0
+    )
+    val = lambda df, c: (
+        moeda(pd.to_numeric(df[c], errors="coerce").fillna(0).sum())
+        if c in df.columns
+        else "R$ 0,00"
+    )
+
     logging.info(
         "Ontem – Corte: %d und / %d ped / %s | Falta: %d und / %d ped / %s",
         tot(s_ontem, "QT_CORTE"),
@@ -375,8 +402,30 @@ def verificar():
         val(s_mes, "PVENDA_FALTA"),
     )
 
+    # >>> NOVA REGRA: enviar somente se HOUVER movimento ontem em CORTE E em FALTA.
+    corte_ontem_ok = _tem_movimento(
+        s_ontem, "QT_CORTE", "COUNT_PED_CORTE", "PVENDA_CORTE"
+    )
+    falta_ontem_ok = _tem_movimento(
+        s_ontem, "QT_FALTA", "COUNT_PED_FALTA", "PVENDA_FALTA"
+    )
+
+    if not (corte_ontem_ok and falta_ontem_ok):
+        motivo = []
+        if not corte_ontem_ok:
+            motivo.append("sem CORTE")
+        if not falta_ontem_ok:
+            motivo.append("sem FALTA")
+        logging.info(
+            "Critério de envio não atendido (ontem %s) → e-mail não enviado.",
+            " e ".join(motivo) or "sem dados",
+        )
+        logging.info("=== Fim verificação ===")
+        return
+
     if s_ontem.empty and s_mes.empty:
         logging.info("Nenhum dado → e-mail não enviado.")
+        logging.info("=== Fim verificação ===")
         return
 
     corpo = corpo_email(bmk_ontem, bmk_mes, s_ontem, s_mes)
