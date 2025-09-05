@@ -5,24 +5,28 @@
     <title>{{TITLE}}</title>
     <meta name="color-scheme" content="light only" />
     <style>
-      /* Base */
+      /* ===== Base do e-mail (cartão centralizado) ===== */
       body {
         margin: 0;
-        padding: 20px;
+        padding: 0;
         font-family: Arial, Helvetica, sans-serif;
         font-size: 14px;
         color: #111827;
-        background: #fff;
+        background: #ffffff;
         line-height: 1.45;
       }
-      .container {
-        max-width: 1200px;
+      /* O “cartão” limita a largura do e-mail para evitar zoom/resize do Outlook */
+      .card {
+        width: 100%;
+        max-width: 640px; /* faixa recomendada 600–640px */
         margin: 0 auto;
+        padding: 16px;
       }
       .title {
         margin: 0 0 8px;
         text-align: center;
         font-size: 22px;
+        color: #111827;
       }
       .subtitle {
         margin: 0 0 12px;
@@ -36,38 +40,46 @@
         margin-top: 14px;
       }
 
-      /* Tabelas */
+      /* ===== Tabelas de dados =====
+         A tabela fica INTEIRA; se for maior que o cartão, aparece rolagem horizontal
+         apenas no contêiner da tabela (sem quebrar layout nem disparar “ver tamanho original”). */
       .tblWrap {
-        overflow-x: auto;
-        margin: 0 auto 20px;
-        max-width: 100%;
+        overflow-x: auto; /* barra horizontal só quando necessário */
+        overflow-y: hidden;
+        -webkit-overflow-scrolling: touch;
+        margin: 0 0 16px;
+        padding-bottom: 2px; /* evita recorte da sombra/borda no fim */
       }
-      table {
+
+      /* A tabela usa somente o espaço necessário (width:auto) */
+      table.data {
         border-collapse: separate;
+        border-spacing: 0;
         border: 1px solid #d1d5db;
         border-radius: 8px;
-        overflow: hidden;
-        width: 100%;
-        min-width: 720px;
+        overflow: hidden; /* bordas arredondadas visuais */
+        width: auto; /* NÃO 100%: evita esticar demais no Outlook */
+        min-width: 720px; /* visual tradicional: tabela completa */
+        font-size: 13px;
       }
-      th,
-      td {
+      table.data th,
+      table.data td {
         border: 1px solid #e5e7eb;
         padding: 8px;
         text-align: center;
         white-space: nowrap;
-        font-size: 13px;
       }
-      th {
+      table.data th {
         background: #282248;
-        color: #fff;
+        color: #ffffff;
         text-transform: uppercase;
       }
-      tr:nth-child(even) {
+      table.data tr:nth-child(even) {
         background: #f9fafb;
       }
-      tr:hover {
+      table.data tr:hover {
         background: #eef2ff;
+        transition: background-color 120ms linear; /* animação suave mantida */
       }
 
       /* Utilitários comuns */
@@ -89,11 +101,21 @@
         color: #b30000;
         font-weight: bold;
       }
+
+      /* Ajustes mínimos para telas pequenas (clientes móveis com bom suporte) */
+      @media (max-width: 420px) {
+        .card {
+          padding: 12px;
+        }
+        .title {
+          font-size: 20px;
+        }
+      }
     </style>
     <!-- EXTRA_CSS -->
   </head>
   <body>
-    <div class="container">
+    <div class="card">
       <h2 class="title">{{TITLE}}</h2>
       {{CONTENT}}
       <div class="footer">{{FOOTER}}</div>
