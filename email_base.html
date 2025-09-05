@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <title>{{TITLE}}</title>
+    <meta name="color-scheme" content="light only" />
+    <style>
+      /* Base */
+      body {
+        margin: 0;
+        padding: 20px;
+        font-family: Arial, Helvetica, sans-serif;
+        font-size: 14px;
+        color: #111827;
+        background: #fff;
+        line-height: 1.45;
+      }
+      .container {
+        max-width: 1200px;
+        margin: 0 auto;
+      }
+      .title {
+        margin: 0 0 8px;
+        text-align: center;
+        font-size: 22px;
+      }
+      .subtitle {
+        margin: 0 0 12px;
+        text-align: center;
+        color: #6b7280;
+      }
+      .footer {
+        text-align: center;
+        font-size: 12.5px;
+        color: #6b7280;
+        margin-top: 14px;
+      }
+
+      /* Tabelas */
+      .tblWrap {
+        overflow-x: auto;
+        margin: 0 auto 20px;
+        max-width: 100%;
+      }
+      table {
+        border-collapse: separate;
+        border: 1px solid #d1d5db;
+        border-radius: 8px;
+        overflow: hidden;
+        width: 100%;
+        min-width: 720px;
+      }
+      th,
+      td {
+        border: 1px solid #e5e7eb;
+        padding: 8px;
+        text-align: center;
+        white-space: nowrap;
+        font-size: 13px;
+      }
+      th {
+        background: #282248;
+        color: #fff;
+        text-transform: uppercase;
+      }
+      tr:nth-child(even) {
+        background: #f9fafb;
+      }
+      tr:hover {
+        background: #eef2ff;
+      }
+
+      /* Utilitários comuns */
+      .muted {
+        color: #6b7280;
+      }
+      .legend {
+        font-size: 13px;
+        color: #555;
+        text-align: center;
+        margin: 6px 0 14px;
+      }
+      .ok {
+        color: #2e7d32;
+        font-weight: bold;
+        text-align: center;
+      }
+      .bad td {
+        color: #b30000;
+        font-weight: bold;
+      }
+    </style>
+    <!-- EXTRA_CSS -->
+  </head>
+  <body>
+    <div class="container">
+      <h2 class="title">{{TITLE}}</h2>
+      {{CONTENT}}
+      <div class="footer">{{FOOTER}}</div>
+    </div>
+  </body>
+</html>
