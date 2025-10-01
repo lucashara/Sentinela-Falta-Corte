@@ -1,47 +1,40 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# ==============================================================================
-# Sentinela · Corte e Falta
-# ------------------------------------------------------------------------------
-# Objetivo:
-#   - Executar consultas SQL (benchmark diário e mensal, sintéticos de ontem e do mês,
-#     analíticos de corte/falta).
-#   - Montar e-mail com:
-#       • Sumário de KPIs (Corte/Falta de Ontem e do Mês)
-#       • Indicadores de Corte (Ontem + Mês) — meta fixa 0,03%
-#       • Indicadores de Falta (Ontem + Mês) — com legenda da média trimestral por filial
-#       • Top 5 por Filial — Ontem
-#       • Top 5 por Filial — Mês corrente
-#   - Anexar XLSX detalhado com 4 abas.
-#   - Rodar manualmente via CLI (--modo manual) ou no loop diário (--modo diario).
-#
-# Pré-requisitos:
-#   - Arquivos SQL em ./sql
-#       relatorio_corte_falta_benchmark.sql
-#       sintetico_corte_falta.sql
-#       sintetico_corte_falta_mes.sql
-#       analitico_corte_mes.sql
-#       analitico_falta_mes.sql
-#   - Template HTML email_base.html no diretório raiz (ao lado deste arquivo).
-#   - .env com as variáveis de e-mail e banco (ver sentinela_core.py e config_bd.py).
-# ==============================================================================
+"""
+Sentinela · Corte
+=================
+Orquestra a execução dos relatórios de Corte:
+- Executa 4 SQLs (todos parametrizados com :DATAI e :DATAF):
+    • relatorio_corte_benchmark.sql   (indicadores por filial)    -> Ontem + Mês/Fechamento
+    • sintetico_corte_ontem.sql       (Top 5 ontem por filial)
+    • sintetico_corte_mes.sql         (Top 5 mês por filial)
+    • analitico_corte_mes.sql         (Analítico mês)
+- Monta e-mail (HTML) a partir do template `email_base.html`
+- Envia e-mail via SMTP (Office 365)
+- Gera anexo XLSX com múltiplas abas
+
+Dependências do projeto:
+- sentinela_core.py  -> logging, SMTP, renderização, XLSX, helpers
+- config_bd.session_scope -> contexto de sessão SQLAlchemy para Oracle
+- ./sql/*.sql        -> arquivos SQL parametrizados com :DATAI e :DATAF
+- ./email_base.html  -> template do email com placeholders {{TITLE}}, {{CONTENT}}, {{FOOTER}}
+
+Como usar:
+    python main.py --modo manual
+    python main.py --modo diario
+"""
 
 from __future__ import annotations
 
 import argparse
 import logging
-from datetime import datetime, timedelta, time as dt_time
+from datetime import datetime, timedelta, date
 from pathlib import Path
-from typing import List
+from typing import Dict, List, Tuple
 
 import pandas as pd
-from dotenv import load_dotenv
 from sqlalchemy.sql import text
 
-# Conexão e sessão com o banco (Oracle via SQLAlchemy)
 from config_bd import session_scope
-
-# Núcleo compartilhado (logging, e-mail, template, XLSX, helpers)
 from sentinela_core import (
     setup_logging,
     load_sql,
@@ -49,184 +42,189 @@ from sentinela_core import (
     render_email,
     moeda_br,
     label_filial,
-    build_subject,
-    compute_next_run,
-    read_env_emails,
     smtp_client,
+    read_env_emails,
     to_xlsx_bytes_multiplas_abas,
+    build_subject_corte,
+    build_attachment_name,
 )
 
 # ------------------------------------------------------------------------------
-# Setup básico
+# Constantes e caminhos
 # ------------------------------------------------------------------------------
-load_dotenv()
-setup_logging("Sentinela-Corte-Falta.log")
-
 BASE_DIR = Path(__file__).resolve().parent
-TITLE_BASE = "Corte e Falta"  # fica "Sentinela · Corte e Falta" no assunto
-AGENDA = [{"dias": [0, 1, 2, 3, 4], "horario": dt_time(8, 0)}]  # seg-sex, 08:00
+LOG_FILE = "Sentinela-Corte.log"
+TITLE_BASE = "Corte"
+
+# Arquivos SQL (pasta ./sql)
+SQL_BMK = "relatorio_corte_benchmark.sql"
+SQL_SINT_ONTEM = "sintetico_corte_ontem.sql"
+SQL_SINT_MES = "sintetico_corte_mes.sql"
+SQL_ANL_MES = "analitico_corte_mes.sql"
 
 
 # ------------------------------------------------------------------------------
-# Utilitários locais
+# Utilitários de datas e período
 # ------------------------------------------------------------------------------
-def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Padroniza nomes de colunas para UPPERCASE sem espaços.”"""
+def _nome_mes_pt(dt: date) -> str:
+    """Retorna 'Mês/AAAA' em PT-BR (ex.: 'Setembro/2025')."""
+    meses = [
+        "Janeiro",
+        "Fevereiro",
+        "Março",
+        "Abril",
+        "Maio",
+        "Junho",
+        "Julho",
+        "Agosto",
+        "Setembro",
+        "Outubro",
+        "Novembro",
+        "Dezembro",
+    ]
+    return f"{meses[dt.month - 1]}/{dt.year}"
+
+
+def _periodo_mes_para(dt_hoje: datetime) -> Tuple[datetime, datetime, bool, str]:
+    """
+    Determina o período do bloco 'Mês':
+    - Se for dia 1 -> 'Fechamento' do mês anterior (1º..último dia do mês anterior)
+    - Senão        -> Mês atual (1º..hoje)
+    Retorna: (DATAI, DATAF, is_fechamento, label_bloco)
+    """
+    if dt_hoje.day == 1:
+        # Fechamento (mês anterior completo)
+        primeiro_destemes = dt_hoje.replace(day=1)
+        ultimo_anterior = primeiro_destemes - timedelta(days=1)
+        datai = ultimo_anterior.replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0
+        )
+        dataf = ultimo_anterior.replace(hour=23, minute=59, second=59, microsecond=0)
+        label = f"Fechamento - {_nome_mes_pt(ultimo_anterior.date())}"
+        return datai, dataf, True, label
+
+    # Mês corrente até hoje
+    datai = dt_hoje.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    dataf = dt_hoje.replace(hour=23, minute=59, second=59, microsecond=0)
+    label = f"Mês Atual - {_nome_mes_pt(dt_hoje.date())}"
+    return datai, dataf, False, label
+
+
+# ------------------------------------------------------------------------------
+# Execução SQL
+# ------------------------------------------------------------------------------
+def _normalize_upper(df: pd.DataFrame) -> pd.DataFrame:
+    """Garante colunas em UPPERCASE para facilitar o consumo a jusante."""
     if df is None or df.empty:
         return pd.DataFrame()
     df.columns = [str(c).strip().upper() for c in df.columns]
     return df
 
 
-def executar_sql(arquivo_sql: str) -> pd.DataFrame:
-    """Executa SQL sem parâmetros (carrega de ./sql/<arquivo_sql>)."""
-    sql = load_sql(arquivo_sql)
-    with session_scope() as s:
-        r = s.execute(text(sql))
-        rows = r.fetchall()
-        cols = [c.upper() for c in r.keys()]
-    return (
-        normalize_columns(pd.DataFrame(rows, columns=cols))
-        if rows
-        else pd.DataFrame(columns=cols)
-    )
-
-
-def executar_sql_param(arquivo_sql: str, di: datetime, df: datetime) -> pd.DataFrame:
+def _executar_sql_binds(nome_arquivo_sql: str, params: Dict) -> pd.DataFrame:
     """
-    Executa SQL com parâmetros de data (:DATAI e :DATAF).
-    Substitui por TO_DATE('yyyy-mm-dd','YYYY-MM-DD') no SQL.
+    Lê o SQL (com binds :DATAI e :DATAF) e executa via SQLAlchemy, retornando
+    DataFrame com colunas normalizadas para UPPERCASE.
     """
-    sql = (
-        load_sql(arquivo_sql)
-        .replace(":DATAI", f"TO_DATE('{di:%Y-%m-%d}','YYYY-MM-DD')")
-        .replace(":DATAF", f"TO_DATE('{df:%Y-%m-%d}','YYYY-MM-DD')")
-    )
+    sql = load_sql(nome_arquivo_sql)
     with session_scope() as s:
-        r = s.execute(text(sql))
-        rows = r.fetchall()
-        cols = [c.upper() for c in r.keys()]
-    return (
-        normalize_columns(pd.DataFrame(rows, columns=cols))
-        if rows
-        else pd.DataFrame(columns=cols)
-    )
+        res = s.execute(text(sql), params)
+        rows = res.fetchall()
+        cols = [c for c in res.keys()]
+    return _normalize_upper(pd.DataFrame(rows, columns=cols))
 
 
 # ------------------------------------------------------------------------------
-# Blocos HTML (componentes do corpo do e-mail)
+# Construção de blocos HTML
 # ------------------------------------------------------------------------------
-def _tabela_indicador(df: pd.DataFrame, tipo: str, titulo_bloco: str) -> str:
+def _fmt_pct_str(pct_str: str) -> str:
     """
-    Monta tabela de indicadores para 'CORTE' ou 'FALTA' em 'Ontem' ou 'Mês Atual'.
-    Requer no df:
-      CODFILIAL, PVENDA_<TIPO>, PCT_PERIODO_<TIPO>, DESVIO_<TIPO>
+    Apenas garante retorno string; o SQL já vem formatado como '0,12%'.
     """
-    tipo = tipo.upper()
-    col_v = f"PVENDA_{tipo}"
-    col_p = f"PCT_PERIODO_{tipo}"
-    col_d = f"DESVIO_{tipo}"
+    return "0,00%" if not pct_str else str(pct_str)
 
-    if tipo == "CORTE":
-        valor_hdr, pct_hdr, desv_hdr = (
-            "Valor Cortado (R$)",
-            "Corte no período (%)",
-            "Desvio vs. Meta",
-        )
-    else:
-        valor_hdr, pct_hdr, desv_hdr = (
-            "Valor em Falta (R$)",
-            "Falta no período (%)",
-            "Desvio vs. Trimestre",
-        )
 
-    if df.empty:
-        return (
-            f"<h3 class='subtitle'>{titulo_bloco}</h3>"
-            "<div class='tblWrap'><table class='data'>"
-            f"<tr><th>Filial</th><th>{valor_hdr}</th><th>{pct_hdr}</th><th>{desv_hdr}</th></tr>"
-            "<tr><td colspan='4'><strong>Sem dados.</strong></td></tr>"
-            "</table></div>"
-        )
+def _build_tabela_indicadores(df: pd.DataFrame, titulo_bloco: str) -> str:
+    """
+    Monta a tabela de indicadores (Corte por Filial), já com:
+    - 2 casas decimais em valores monetários (moeda_br)
+    - Linha TOTAL destacada (.total-row no CSS)
+    - Linhas com 'ACIMA' (desvio > meta) em vermelho (.bad)
+    - Tabela centralizada (via .tblWrap + inline-table no template)
+
+    Colunas esperadas no DF (UPPER):
+      CODFILIAL | PVENDA_CORTE | PCT_PERIODO_CORTE | DESVIO_CORTE | FATURAMENTO
+    """
+    headers = (
+        "<tr>"
+        "<th>Filial</th>"
+        "<th>Valor Cortado (R$)</th>"
+        "<th>Corte no período (%)</th>"
+        "<th>Desvio vs. Meta</th>"
+        "<th>Faturado (R$)</th>"
+        "</tr>"
+    )
 
     linhas: List[str] = []
     for _, r in df.iterrows():
-        cod = r["CODFILIAL"]
-        filial = "TOTAL" if str(cod) == "TOTAL" else label_filial(cod)
-        val = moeda_br(r.get(col_v, 0))
-        pct = str(r.get(col_p, "0,00%") or "0,00%")
-        des = str(r.get(col_d, "0%") or "0%")
-        cls = " class='bad'" if "ACIMA" in des.upper() else ""
+        cod = str(r.get("CODFILIAL"))
+        filial = "TOTAL" if cod == "TOTAL" else label_filial(cod)
+
+        corte_val = moeda_br(round(float(r.get("PVENDA_CORTE") or 0), 2))
+        pct = _fmt_pct_str(r.get("PCT_PERIODO_CORTE", "0,00%"))
+        desvio = str(r.get("DESVIO_CORTE") or "0%")
+        faturado_val = moeda_br(round(float(r.get("FATURAMENTO") or 0), 2))
+
+        # vermelho somente para ACIMA da meta
+        tr_classes = []
+        if desvio.upper().find("ACIMA") >= 0:
+            tr_classes.append("bad")
+        if cod == "TOTAL":
+            tr_classes.append("total-row")
+
+        cls_attr = f" class=\"{' '.join(tr_classes)}\"" if tr_classes else ""
         linhas.append(
-            f"<tr{cls}><td>{filial}</td><td>{val}</td><td>{pct}</td><td>{des}</td></tr>"
+            f"<tr{cls_attr}>"
+            f"<td>{filial}</td>"
+            f"<td>{corte_val}</td>"
+            f"<td>{pct}</td>"
+            f"<td>{desvio}</td>"
+            f"<td>{faturado_val}</td>"
+            f"</tr>"
         )
 
     return (
-        f"<h3 class='subtitle'>{titulo_bloco}</h3>"
-        f"<div class='tblWrap'><table class='data'>"
-        f"<tr><th>Filial</th><th>{valor_hdr}</th><th>{pct_hdr}</th><th>{desv_hdr}</th></tr>"
-        f"{''.join(linhas)}</table></div>"
+        f"<h3 class='subtitle subtitle-small sectionHeader'>{titulo_bloco}</h3>"
+        "<div class='tblWrap'>"
+        "<table class='data'>"
+        f"{headers}{''.join(linhas)}"
+        "</table>"
+        "</div>"
     )
 
 
-def _legenda_media_trim_falta(df_mes: pd.DataFrame) -> str:
+def _rank_por_filial(df: pd.DataFrame, titulo: str) -> str:
     """
-    Gera legenda da média trimestral de falta por filial, se a coluna
-    MEDIA_TRIM_FALTA existir no df do mês.
+    Constrói as tabelas Top 5 por filial (base PVENDA_CORTE).
+    Espera colunas (UPPER): CODFILIAL, CODPROD, DESCRICAO, QT_CORTE, COUNT_PED_CORTE, PVENDA_CORTE
     """
-    if df_mes.empty or "MEDIA_TRIM_FALTA" not in df_mes.columns:
-        return ""
-    pares = []
-    for _, rr in df_mes.iterrows():
-        if str(rr.get("CODFILIAL")) != "TOTAL":
-            pares.append(f"{label_filial(rr['CODFILIAL'])}: {rr['MEDIA_TRIM_FALTA']}")
-    return (
-        f"<p class='legend'><em>Média Trimestral por Filial (Falta): {', '.join(pares)}</em></p>"
-        if pares
-        else ""
-    )
+    if df is None or df.empty:
+        return f"<h3 class='subtitle subtitle-small sectionHeader'>{titulo}</h3><p class='muted' style='text-align:center'>Sem dados.</p>"
 
-
-def tabelas_benchmark(bmk_ontem: pd.DataFrame, bmk_mes: pd.DataFrame, tipo: str) -> str:
-    """Junta as duas tabelas (Ontem + Mês Atual) para CORTE ou FALTA."""
-    bloco_ontem = _tabela_indicador(bmk_ontem, tipo, "Ontem")
-    bloco_mes = _tabela_indicador(bmk_mes, tipo, "Mês Atual")
-    if tipo.upper() == "FALTA":
-        return bloco_ontem + _legenda_media_trim_falta(bmk_mes) + bloco_mes
-    return bloco_ontem + bloco_mes
-
-
-def rank_por_filial(df: pd.DataFrame) -> str:
-    """
-    Exibe Top 5 produtos por filial, priorizando CORTE se as colunas existirem,
-    senão usa FALTA. Filtra linhas com quantidade e valor > 0.
-    """
-    if df.empty:
-        return "<p class='ok'>Sem ranking.</p>"
-
-    if "QT_CORTE" in df.columns:
-        qt_field, cnt_field, val_field = "QT_CORTE", "COUNT_PED_CORTE", "PVENDA_CORTE"
-    else:
-        qt_field, cnt_field, val_field = "QT_FALTA", "COUNT_PED_FALTA", "PVENDA_FALTA"
-
-    blocos: List[str] = []
+    blocos = [f"<h3 class='subtitle subtitle-small sectionHeader'>{titulo}</h3>"]
     for cod in sorted(df["CODFILIAL"].astype(str).unique()):
-        grp = df[
-            (df["CODFILIAL"].astype(str) == cod)
-            & (df[qt_field] > 0)
-            & (df[val_field] > 0)
-        ]
+        grp = df[df["CODFILIAL"].astype(str) == cod].copy()
         if grp.empty:
             continue
 
+        # agrega por produto dentro da filial
         top = (
-            grp.groupby(["CODPROD", "DESCRICAO"])
+            grp.groupby(["CODPROD", "DESCRICAO"], as_index=False)
             .agg(
-                QT_UND=(qt_field, "sum"),
-                QT_PED=(cnt_field, "sum"),
-                VAL=(val_field, "sum"),
+                QT_UND=("QT_CORTE", "sum"),
+                QT_PED=("COUNT_PED_CORTE", "sum"),
+                VAL=("PVENDA_CORTE", "sum"),
             )
-            .reset_index()
             .sort_values("VAL", ascending=False)
             .head(5)
         )
@@ -236,176 +234,180 @@ def rank_por_filial(df: pd.DataFrame) -> str:
         ]
         for r in top.itertuples(index=False):
             linhas.append(
-                f"<tr><td>{r.CODPROD}</td><td>{r.DESCRICAO}</td>"
-                f"<td>{int(r.QT_UND)}</td><td>{int(r.QT_PED)}</td><td>{moeda_br(r.VAL)}</td></tr>"
+                "<tr>"
+                f"<td>{r.CODPROD}</td>"
+                f"<td>{r.DESCRICAO}</td>"
+                f"<td>{int(round(float(r.QT_UND or 0)))}</td>"
+                f"<td>{int(round(float(r.QT_PED or 0)))}</td>"
+                f"<td>{moeda_br(round(float(r.VAL or 0), 2))}</td>"
+                "</tr>"
             )
 
         blocos.append(
-            f"<h3 class='subtitle'>{label_filial(cod)}</h3>"
-            f"<div class='tblWrap'><table class='data'>{''.join(linhas)}</table></div>"
+            f"<h4 class='subtitle subtitle-mini' style='margin-top:6px'>{label_filial(cod)}</h4>"
+            "<div class='tblWrap'><table class='data'>"
+            + "".join(linhas)
+            + "</table></div>"
         )
 
-    return "".join(blocos) or "<p class='ok'>Sem ranking.</p>"
+    return "".join(blocos)
 
 
-def _sumario_kpis(df_ontem: pd.DataFrame, df_mes: pd.DataFrame) -> str:
-    """
-    Sumário compacto de KPIs (valores totais de Corte e Falta) para Ontem e Mês.
-    """
-    parts: List[str] = []
-    if not df_ontem.empty:
-        corte_o = df_ontem.get("PVENDA_CORTE", pd.Series(dtype=float)).sum()
-        falta_o = df_ontem.get("PVENDA_FALTA", pd.Series(dtype=float)).sum()
-        parts.append(
-            f"<p><strong>Ontem</strong> → Corte: {moeda_br(corte_o)}, Falta: {moeda_br(falta_o)}</p>"
-        )
-    if not df_mes.empty:
-        corte_m = df_mes.get("PVENDA_CORTE", pd.Series(dtype=float)).sum()
-        falta_m = df_mes.get("PVENDA_FALTA", pd.Series(dtype=float)).sum()
-        parts.append(
-            f"<p><strong>Mês Atual</strong> → Corte: {moeda_br(corte_m)}, Falta: {moeda_br(falta_m)}</p>"
-        )
-    return (
-        "".join(parts) if parts else "<p class='ok'>Sem movimentação para exibir.</p>"
-    )
-
-
-def corpo_email_completo(
-    assunto: str,
+def _montar_html_email(
     bmk_ontem: pd.DataFrame,
     bmk_mes: pd.DataFrame,
     s_ontem: pd.DataFrame,
     s_mes: pd.DataFrame,
+    assunto: str,
+    titulo_mes_bloco: str,
 ) -> str:
     """
-    Monta o corpo HTML completo (com tabelas e rankings) usando email_base.html.
+    Monta o HTML final usando o template `email_base.html`:
+    - Título H2 central
+    - Subtítulo 'Indicadores de Corte (Meta fixa 0,03%)' central e menor
+    - Tabela de indicadores (Ontem e Mês/Fechamento)
+    - Top 5 por filial (Ontem e Mês)
     """
-    mes_nome = datetime.now().strftime("%B").capitalize()
-
     partes: List[str] = []
-    partes.append("<h3 class='subtitle'>Relatório de Indicadores</h3>")
-    partes.append(_sumario_kpis(s_ontem, s_mes))
-
-    partes.append("<h3>Indicadores de Corte (Meta fixa 0,03%)</h3>")
-    partes.append(tabelas_benchmark(bmk_ontem, bmk_mes, "CORTE"))
-
-    partes.append("<h3>Indicadores de Falta</h3>")
-    partes.append(tabelas_benchmark(bmk_ontem, bmk_mes, "FALTA"))
-
-    partes.append("<h3>Top 5 por Filial – Ontem</h3>")
-    partes.append(rank_por_filial(s_ontem))
-
-    partes.append(f"<h3>Top 5 por Filial – Mês {mes_nome}</h3>")
-    partes.append(rank_por_filial(s_mes))
-
-    tpl = read_template("email_base.html")
-    footer = "Este é um e-mail automático. Não responda."
-    return render_email(tpl, assunto, "".join(partes), footer, extra_css=None)
-
-
-# ------------------------------------------------------------------------------
-# Fluxo principal
-# ------------------------------------------------------------------------------
-def verificar() -> None:
-    """
-    Orquestra:
-      1) Executa SQLs
-      2) Aplica critérios de envio
-      3) Monta HTML e gera anexo XLSX
-      4) Envia e-mail
-    """
-    logging.info("Início da verificação")
-
-    ontem = datetime.now() - timedelta(days=1)
-    mes_ini = datetime.now().replace(day=1)
-
-    # Benchmarks (parametrizados por data)
-    bmk_ontem = executar_sql_param("relatorio_corte_falta_benchmark.sql", ontem, ontem)
-    bmk_mes = executar_sql_param(
-        "relatorio_corte_falta_benchmark.sql", mes_ini, datetime.now()
+    partes.append(
+        "<h3 class='subtitle subtitle-small sectionHeader' style='margin-top:2px'>Indicadores de Corte (Meta fixa 0,03%)</h3>"
     )
-
-    # Sintéticos (ontem e mês) e analíticos (mês)
-    s_ontem = executar_sql("sintetico_corte_falta.sql")
-    s_mes = executar_sql("sintetico_corte_falta_mes.sql")
-    a_corte = executar_sql("analitico_corte_mes.sql")
-    a_falta = executar_sql("analitico_falta_mes.sql")
-
-    # Critério de envio:
-    #   Envia se houver CORTE OU FALTA no dia anterior (evita e-mail vazio)
-    corte_ok = (
-        (not s_ontem.empty)
-        and ("PVENDA_CORTE" in s_ontem.columns)
-        and (s_ontem["PVENDA_CORTE"].sum() > 0)
-    )
-    falta_ok = (
-        (not s_ontem.empty)
-        and ("PVENDA_FALTA" in s_ontem.columns)
-        and (s_ontem["PVENDA_FALTA"].sum() > 0)
-    )
-    if not (corte_ok or falta_ok):
-        logging.info(
-            "Critério de envio não atendido (sem corte e sem falta ontem). E-mail não enviado."
+    partes.append(_build_tabela_indicadores(bmk_ontem, "Ontem"))
+    partes.append(_build_tabela_indicadores(bmk_mes, titulo_mes_bloco))
+    partes.append(_rank_por_filial(s_ontem, "Top 5 por Filial - Ontem"))
+    partes.append(
+        _rank_por_filial(
+            s_mes,
+            "Top 5 por Filial - "
+            + titulo_mes_bloco.replace("Fechamento - ", "").replace("Mês Atual - ", ""),
         )
-        logging.info("Fim da verificação")
-        return
+    )
 
-    # Assunto padronizado (usa helper do core)
-    assunto = build_subject(TITLE_BASE)
+    # Renderiza no template
+    tpl = read_template("email_base.html")
+    footer = "Este e-mail é gerado automaticamente. Não responda."
+    html = render_email(
+        template=tpl, title=assunto, content="".join(partes), footer=footer
+    )
+    return html
 
-    # Corpo do e-mail (completo, seguindo estrutura padronizada)
-    html = corpo_email_completo(assunto, bmk_ontem, bmk_mes, s_ontem, s_mes)
 
-    # Anexo XLSX — nomes “humanos”; sanitização automática no core
-    dfs = {
-        f"Sintético ({ontem:%d/%m/%Y})": s_ontem,
-        f"Sintético Mês {datetime.now():%B}": s_mes,
-        "Analítico Corte Mês": a_corte,
-        "Analítico Falta Mês": a_falta,
+# ------------------------------------------------------------------------------
+# Orquestração principal
+# ------------------------------------------------------------------------------
+def montar_corpo_e_anexo(
+    hoje: datetime,
+) -> Tuple[str, bytes, Dict[str, pd.DataFrame], str, str]:
+    """
+    Executa os SQLs, monta o HTML e gera o XLSX.
+    Retorna:
+        html, anexo_bytes, abas_dict, nome_anexo, assunto
+    """
+    logging.info("Início do ciclo Sentinela · Corte")
+
+    # Períodos
+    ontem_i = (hoje - timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    ontem_f = ontem_i.replace(hour=23, minute=59, second=59, microsecond=0)
+    di_mes, df_mes, is_fechamento, label_mes_bloco = _periodo_mes_para(hoje)
+
+    # Benchmarks (por filial)
+    bmk_ontem = _executar_sql_binds(SQL_BMK, {"DATAI": ontem_i, "DATAF": ontem_f})
+    bmk_mes = _executar_sql_binds(SQL_BMK, {"DATAI": di_mes, "DATAF": df_mes})
+
+    # Sintéticos e Analítico
+    s_ontem = _executar_sql_binds(SQL_SINT_ONTEM, {"DATAI": ontem_i, "DATAF": ontem_f})
+    s_mes = _executar_sql_binds(SQL_SINT_MES, {"DATAI": di_mes, "DATAF": df_mes})
+    a_mes = _executar_sql_binds(SQL_ANL_MES, {"DATAI": di_mes, "DATAF": df_mes})
+
+    # Assunto e anexo
+    assunto = build_subject_corte(hoje=hoje, is_fechamento=is_fechamento)
+    nome_anexo = build_attachment_name(hoje=hoje, is_fechamento=is_fechamento)
+
+    # HTML final
+    html = _montar_html_email(
+        bmk_ontem=bmk_ontem,
+        bmk_mes=bmk_mes,
+        s_ontem=s_ontem,
+        s_mes=s_mes,
+        assunto=assunto,
+        titulo_mes_bloco=label_mes_bloco,
+    )
+
+    # XLSX com 3 abas
+    abas = {
+        f"Sintético (Ontem {ontem_i:%d/%m/%Y})": s_ontem,
+        f"Sintético {label_mes_bloco}": s_mes,
+        f"Analítico Corte {label_mes_bloco}": a_mes,
     }
-    anexo = to_xlsx_bytes_multiplas_abas(dfs)
+    anexo = to_xlsx_bytes_multiplas_abas(abas)
 
-    # Envio
-    dest = read_env_emails()
+    return html, anexo, abas, nome_anexo, assunto
+
+
+def _enviar_email(hoje: datetime) -> None:
+    """Chama a orquestração e dispara o envio via SMTP (Office 365)."""
+    html, anexo, abas, nome_anexo, assunto = montar_corpo_e_anexo(hoje)
+    destinatarios = read_env_emails()
     smtp = smtp_client()
     smtp.send_html(
         subject=assunto,
         html=html,
-        to=dest["to"],
-        cc=dest["cc"],
-        bcc=dest["bcc"],
-        attachments=[
-            (f"Sentinela_Corte_Falta_{datetime.now():%Y%m%d_%H%M}.xlsx", anexo)
-        ],
+        to=destinatarios["to"],
+        cc=destinatarios["cc"],
+        bcc=destinatarios["bcc"],
+        attachments=[(nome_anexo, anexo)],
         priority_high=True,
     )
-
     logging.info("E-mail enviado com sucesso.")
-    logging.info("Fim da verificação")
 
 
-def _loop() -> None:
-    """Loop do modo 'diario' (executa nos dias/horários definidos em AGENDA)."""
-    import time as _t
+def _loop_diario() -> None:
+    """
+    Loop diário simples:
+    - Executa apenas em dias úteis às 08:00.
+    - Não usa libs externas de scheduling para manter o script autocontido.
+    """
+    import time as _time
+
+    def proximo_disparo() -> datetime:
+        agora = datetime.now()
+        alvo = agora.replace(hour=8, minute=0, second=0, microsecond=0)
+        if agora > alvo or agora.weekday() >= 5:
+            d = agora
+            # próximo dia útil
+            while True:
+                d = d + timedelta(days=1)
+                if d.weekday() < 5:
+                    break
+            return d.replace(hour=8, minute=0, second=0, microsecond=0)
+        return alvo
 
     while True:
-        nxt = compute_next_run(AGENDA)
-        logging.info("Próxima execução: %s", nxt.strftime("%d/%m/%Y %H:%M:%S"))
-        _t.sleep(max(0, (nxt - datetime.now()).total_seconds()))
-        verificar()
+        prox = proximo_disparo()
+        logging.info("Próxima execução: %s", prox.strftime("%d/%m/%Y %H:%M:%S"))
+        _time.sleep(max(0, int((prox - datetime.now()).total_seconds())))
+        try:
+            _enviar_email(datetime.now())
+        except Exception as e:
+            logging.exception("Falha no envio diário: %s", e)
 
 
 def main() -> None:
-    """CLI: --modo manual | --modo diario"""
-    ap = argparse.ArgumentParser(description="Sentinela · Corte e Falta")
+    """Ponto de entrada do script."""
+    setup_logging(LOG_FILE)
+
+    ap = argparse.ArgumentParser(description="Sentinela · Corte")
     ap.add_argument("--modo", choices=["manual", "diario"], required=True)
-    modo = ap.parse_args().modo
-    if modo == "manual":
-        logging.info("Modo manual")
-        verificar()
+    args = ap.parse_args()
+
+    logging.info("Sentinela · Corte iniciado | Modo=%s", args.modo)
+
+    if args.modo == "manual":
+        _enviar_email(datetime.now())
     else:
-        logging.info("Modo diário")
-        _loop()
+        _loop_diario()
 
 
 if __name__ == "__main__":

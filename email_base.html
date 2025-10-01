@@ -5,34 +5,47 @@
     <title>{{TITLE}}</title>
     <meta name="color-scheme" content="light only" />
     <style>
-      /* ===== Base do e-mail (cartão centralizado) ===== */
+      /* ===== Base (SEM fundo colorido) ===== */
       body {
         margin: 0;
         padding: 0;
         font-family: Arial, Helvetica, sans-serif;
         font-size: 14px;
-        color: #111827;
-        background: #ffffff;
+        color: #111827; /* texto preto no modo claro */
+        background: #ffffff; /* fundo branco */
         line-height: 1.45;
       }
-      /* O “cartão” limita a largura do e-mail para evitar zoom/resize do Outlook */
+
+      /* Cartão central limitado (600–640px) */
       .card {
         width: 100%;
-        max-width: 640px; /* faixa recomendada 600–640px */
+        max-width: 640px;
         margin: 0 auto;
         padding: 16px;
       }
+
       .title {
         margin: 0 0 8px;
         text-align: center;
         font-size: 22px;
         color: #111827;
       }
+
       .subtitle {
-        margin: 0 0 12px;
-        text-align: center;
+        margin: 8px 0 10px;
+        text-align: center; /* centraliza subtítulos */
+        color: #374151;
+      }
+      .subtitle-small {
+        font-size: 15px;
+        line-height: 1.3;
+      }
+      .subtitle-mini {
+        font-size: 13px;
+        line-height: 1.3;
         color: #6b7280;
       }
+
       .footer {
         text-align: center;
         font-size: 12.5px;
@@ -40,75 +53,96 @@
         margin-top: 14px;
       }
 
-      /* ===== Tabelas de dados =====
-         A tabela fica INTEIRA; se for maior que o cartão, aparece rolagem horizontal
-         apenas no contêiner da tabela (sem quebrar layout nem disparar “ver tamanho original”). */
+      /* ===== Tabelas centradas (não 100%) =====
+         Ajustes para FICAR MENORES:
+         - Fonte 11px
+         - Padding 6px
+         - min-width menor (480px)
+      */
       .tblWrap {
-        overflow-x: auto; /* barra horizontal só quando necessário */
+        text-align: center; /* centraliza o inline-table */
+        overflow-x: auto; /* rolagem horizontal só quando precisar */
         overflow-y: hidden;
         -webkit-overflow-scrolling: touch;
-        margin: 0 0 16px;
-        padding-bottom: 2px; /* evita recorte da sombra/borda no fim */
+        margin: 0 0 12px;
+        padding-bottom: 1px;
       }
 
-      /* A tabela usa somente o espaço necessário (width:auto) */
       table.data {
+        display: inline-table; /* permite centralizar dentro do wrapper */
+        table-layout: auto;
         border-collapse: separate;
         border-spacing: 0;
         border: 1px solid #d1d5db;
         border-radius: 8px;
         overflow: hidden; /* bordas arredondadas visuais */
-        width: auto; /* NÃO 100%: evita esticar demais no Outlook */
-        min-width: 720px; /* visual tradicional: tabela completa */
-        font-size: 13px;
+        width: auto; /* NÃO usar 100% para evitar “estouro” */
+        min-width: 480px; /* menor que antes para compactar */
+        font-size: 11px; /* <<< menor */
+        color: #000000; /* dados pretos e legíveis no modo claro */
       }
+
       table.data th,
       table.data td {
         border: 1px solid #e5e7eb;
-        padding: 8px;
+        padding: 6px; /* <<< menor */
         text-align: center;
         white-space: nowrap;
       }
+
       table.data th {
         background: #282248;
         color: #ffffff;
         text-transform: uppercase;
-      }
-      table.data tr:nth-child(even) {
-        background: #f9fafb;
-      }
-      table.data tr:hover {
-        background: #eef2ff;
-        transition: background-color 120ms linear; /* animação suave mantida */
+        font-size: 11px; /* cabeçalho proporcional */
       }
 
-      /* Utilitários comuns */
+      /* Zebra para legibilidade (sutil) */
+      table.data tbody tr:nth-child(even) td {
+        background: #fafafa;
+      }
+
+      /* Hover AZUL mais suave (menos “gritante”) */
+      table.data tbody tr:hover td {
+        background-color: #eaf2ff !important; /* azul bem leve */
+        color: #000000 !important;
+        transition: background-color 100ms linear;
+      }
+
+      /* Linha TOTAL destacada (sem fundo; bordas e negrito) */
+      .total-row td {
+        font-weight: 700;
+        border-top: 2px solid #0f5db1;
+        border-bottom: 2px solid #0f5db1;
+        letter-spacing: 0.02em;
+      }
+
+      /* Desvio ACIMA da meta -> vermelho forte */
+      .bad td {
+        color: #b30000 !important;
+        font-weight: 700;
+      }
+
+      /* Utilitários */
       .muted {
         color: #6b7280;
       }
-      .legend {
-        font-size: 13px;
-        color: #555;
-        text-align: center;
-        margin: 6px 0 14px;
-      }
-      .ok {
-        color: #2e7d32;
-        font-weight: bold;
-        text-align: center;
-      }
-      .bad td {
-        color: #b30000;
-        font-weight: bold;
-      }
 
-      /* Ajustes mínimos para telas pequenas (clientes móveis com bom suporte) */
+      /* Ajustes mínimos mobile */
       @media (max-width: 420px) {
         .card {
           padding: 12px;
         }
         .title {
           font-size: 20px;
+        }
+        table.data {
+          min-width: 440px; /* ainda menor no mobile quando possível */
+          font-size: 10.5px; /* leve redução no mobile */
+        }
+        table.data th,
+        table.data td {
+          padding: 5px;
         }
       }
     </style>
